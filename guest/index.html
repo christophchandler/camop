@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fieldcast — Guest Recording</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      max-width: 640px;
+      width: 100%;
+      padding: 2rem;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      color: #fff;
+    }
+    .subtitle {
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 2rem;
+    }
+
+    /* Name entry */
+    #name-screen { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+    #name-input {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      color: #fff;
+      width: 100%;
+      max-width: 320px;
+      text-align: center;
+      outline: none;
+    }
+    #name-input:focus { border-color: #4a9eff; }
+    #name-input::placeholder { color: #555; }
+
+    /* Buttons */
+    .btn {
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #4a9eff; color: #fff; }
+    .btn-danger { background: #ef4444; color: #fff; }
+    .btn-success { background: #22c55e; color: #fff; }
+
+    /* Recording screen */
+    #recording-screen { display: none; flex-direction: column; align-items: center; gap: 1rem; }
+    #video-preview {
+      width: 100%;
+      max-width: 560px;
+      border-radius: 12px;
+      background: #1a1a1a;
+      transform: scaleX(-1);
+    }
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 0.95rem;
+    }
+    .rec-dot {
+      width: 12px;
+      height: 12px;
+      background: #ef4444;
+      border-radius: 50%;
+      animation: pulse 1s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .timer { font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Menlo', monospace; color: #fff; }
+    .codec-badge {
+      font-size: 0.7rem;
+      background: #2a2a2a;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      color: #888;
+    }
+    .controls { display: flex; gap: 0.75rem; }
+
+    /* Status messages */
+    .status-msg {
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      width: 100%;
+      max-width: 480px;
+    }
+    .status-waiting { background: #1a2332; color: #4a9eff; }
+    .status-recording { background: #2d1215; color: #ef4444; }
+    .status-uploading { background: #1a2332; color: #4a9eff; }
+    .status-complete { background: #0f2918; color: #22c55e; }
+    .status-error { background: #2d1215; color: #ef4444; }
+
+    /* Progress bar */
+    .progress-container {
+      width: 100%;
+      max-width: 480px;
+      background: #1a1a1a;
+      border-radius: 8px;
+      overflow: hidden;
+      height: 8px;
+      display: none;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #4a9eff;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    /* Connection indicator */
+    .connection-bar {
+      display: none;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      color: #f59e0b;
+      background: #2d2305;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    /* Error screen */
+    #error-screen { display: none; flex-direction: column; align-items: center; gap: 1rem; }
+    .error-instructions {
+      text-align: left;
+      background: #1a1a1a;
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      max-width: 480px;
+      width: 100%;
+    }
+    .error-instructions strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Fieldcast</h1>
+    <p class="subtitle">Local Recording Agent</p>
+
+    <!-- Name Entry Screen -->
+    <div id="name-screen">
+      <input type="text" id="name-input" placeholder="What's your name?" maxlength="60" autofocus>
+      <button class="btn btn-primary" id="join-btn" disabled>Join Session</button>
+    </div>
+
+    <!-- Recording Screen -->
+    <div id="recording-screen">
+      <video id="video-preview" autoplay muted playsinline></video>
+
+      <div class="connection-bar" id="connection-bar">
+        &#x26A0; Connection lost — reconnecting...
+      </div>
+
+      <div class="status-bar" id="status-bar">
+        <span id="status-text" class="status-msg status-waiting">Waiting for producer to start recording...</span>
+      </div>
+
+      <div class="status-bar" id="rec-bar" style="display:none;">
+        <span class="rec-dot"></span>
+        <span class="timer" id="timer">00:00:00</span>
+        <span class="codec-badge" id="codec-badge"></span>
+      </div>
+
+      <div class="controls" id="controls" style="display:none;">
+        <button class="btn btn-danger" id="stop-btn">Stop &amp; Upload</button>
+      </div>
+
+      <div class="progress-container" id="progress-container">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+    </div>
+
+    <!-- Error Screen -->
+    <div id="error-screen">
+      <div class="status-msg status-error" id="error-msg"></div>
+      <div class="error-instructions" id="error-instructions"></div>
+    </div>
+  </div>
+
+  <script>
+    // ========================================================
+    // STEP 1: Codec detection — log support before anything else
+    // ========================================================
+    const MIME_PRIORITY = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm'
+    ];
+
+    console.log('=== Fieldcast Codec Support ===');
+    MIME_PRIORITY.forEach(type => {
+      console.log(`${type}: ${MediaRecorder.isTypeSupported(type)}`);
+    });
+
+    const selectedMime = MIME_PRIORITY.find(t => MediaRecorder.isTypeSupported(t));
+    const fileExtension = selectedMime && selectedMime.includes('webm') ? 'webm' : 'mp4';
+    console.log(`Selected: ${selectedMime} (.${fileExtension})`);
+
+    // ========================================================
+    // State
+    // ========================================================
+    let guestName = '';
+    let mediaStream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let recordingStartTime = null;
+    let timerInterval = null;
+    let ws = null;
+    let wsReconnectTimer = null;
+    let isRecording = false;
+    let sessionId = null;
+
+    // Extract session ID from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    sessionId = urlParams.get('session');
+
+    // ========================================================
+    // DOM References
+    // ========================================================
+    const nameScreen = document.getElementById('name-screen');
+    const nameInput = document.getElementById('name-input');
+    const joinBtn = document.getElementById('join-btn');
+    const recordingScreen = document.getElementById('recording-screen');
+    const videoPreview = document.getElementById('video-preview');
+    const statusText = document.getElementById('status-text');
+    const recBar = document.getElementById('rec-bar');
+    const timerEl = document.getElementById('timer');
+    const codecBadge = document.getElementById('codec-badge');
+    const controls = document.getElementById('controls');
+    const stopBtn = document.getElementById('stop-btn');
+    const progressContainer = document.getElementById('progress-container');
+    const progressBar = document.getElementById('progress-bar');
+    const connectionBar = document.getElementById('connection-bar');
+    const errorScreen = document.getElementById('error-screen');
+    const errorMsg = document.getElementById('error-msg');
+    const errorInstructions = document.getElementById('error-instructions');
+
+    // ========================================================
+    // Name Entry
+    // ========================================================
+    nameInput.addEventListener('input', () => {
+      joinBtn.disabled = nameInput.value.trim().length === 0;
+    });
+
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !joinBtn.disabled) joinBtn.click();
+    });
+
+    joinBtn.addEventListener('click', async () => {
+      guestName = nameInput.value.trim();
+      if (!guestName) return;
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 }
+          },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 48000
+          }
+        });
+
+        videoPreview.srcObject = mediaStream;
+        nameScreen.style.display = 'none';
+        recordingScreen.style.display = 'flex';
+        codecBadge.textContent = fileExtension.toUpperCase();
+
+        connectWebSocket();
+      } catch (err) {
+        showError(err);
+      }
+    });
+
+    // ========================================================
+    // WebSocket Connection
+    // ========================================================
+    function connectWebSocket() {
+      if (!sessionId) {
+        // No session ID — standalone mode (Phase 1 testing)
+        statusText.textContent = 'Standalone mode — click Start to begin recording';
+        statusText.className = 'status-msg status-waiting';
+        showStandaloneControls();
+        return;
+      }
+
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProtocol}//${location.host}/ws?session=${sessionId}`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        connectionBar.style.display = 'none';
+        clearInterval(wsReconnectTimer);
+        ws.send(JSON.stringify({ type: 'guest-join', name: guestName }));
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleServerMessage(msg);
+      };
+
+      ws.onclose = () => {
+        if (isRecording) {
+          // Recording continues — WebSocket is independent
+          connectionBar.style.display = 'flex';
+          attemptReconnect();
+        }
+      };
+
+      ws.onerror = () => {
+        // Error will trigger onclose
+      };
+    }
+
+    function attemptReconnect() {
+      let attempts = 0;
+      wsReconnectTimer = setInterval(() => {
+        attempts++;
+        if (attempts > 10) {
+          clearInterval(wsReconnectTimer);
+          connectionBar.textContent = '\u26A0 Connection lost. Use the Stop button to save your recording.';
+          controls.style.display = 'flex';
+          return;
+        }
+        connectWebSocket();
+      }, 3000);
+    }
+
+    function handleServerMessage(msg) {
+      switch (msg.type) {
+        case 'start-recording':
+          startRecording();
+          break;
+        case 'stop-recording':
+          stopRecording();
+          break;
+      }
+    }
+
+    // ========================================================
+    // Standalone controls (Phase 1 / no WebSocket)
+    // ========================================================
+    function showStandaloneControls() {
+      const startBtn = document.createElement('button');
+      startBtn.className = 'btn btn-success';
+      startBtn.textContent = 'Start Recording';
+      startBtn.id = 'start-btn';
+      startBtn.addEventListener('click', () => {
+        startRecording();
+        startBtn.style.display = 'none';
+      });
+      controls.style.display = 'flex';
+      controls.prepend(startBtn);
+      stopBtn.style.display = 'none';
+    }
+
+    // ========================================================
+    // Recording
+    // ========================================================
+    function startRecording() {
+      if (!selectedMime) {
+        statusText.textContent = 'No supported recording format found in this browser.';
+        statusText.className = 'status-msg status-error';
+        return;
+      }
+
+      recordedChunks = [];
+
+      mediaRecorder = new MediaRecorder(mediaStream, {
+        mimeType: selectedMime,
+        videoBitsPerSecond: 4_000_000 // 4 Mbps
+      });
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        handleRecordingStopped();
+      };
+
+      mediaRecorder.start(1000); // 1-second chunks
+      isRecording = true;
+      recordingStartTime = Date.now();
+
+      // Update UI
+      statusText.textContent = 'Recording in progress';
+      statusText.className = 'status-msg status-recording';
+      recBar.style.display = 'flex';
+      controls.style.display = 'flex';
+      stopBtn.style.display = '';
+
+      const startBtn = document.getElementById('start-btn');
+      if (startBtn) startBtn.style.display = 'none';
+
+      startTimer();
+
+      // Notify producer
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'recording-started' }));
+      }
+    }
+
+    function stopRecording() {
+      if (!isRecording || !mediaRecorder) return;
+      isRecording = false;
+      mediaRecorder.stop();
+      stopTimer();
+    }
+
+    stopBtn.addEventListener('click', stopRecording);
+
+    async function handleRecordingStopped() {
+      const blob = new Blob(recordedChunks, { type: selectedMime });
+      const sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
+
+      statusText.textContent = `Recording stopped (${sizeMB} MB). Uploading...`;
+      statusText.className = 'status-msg status-uploading';
+      controls.style.display = 'none';
+      recBar.style.display = 'none';
+
+      const fileName = buildFileName();
+      await uploadToB2(blob, fileName);
+    }
+
+    // ========================================================
+    // Timer
+    // ========================================================
+    function startTimer() {
+      timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+        const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+        const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+        const s = String(elapsed % 60).padStart(2, '0');
+        timerEl.textContent = `${h}:${m}:${s}`;
+      }, 500);
+    }
+
+    function stopTimer() {
+      clearInterval(timerInterval);
+    }
+
+    // ========================================================
+    // File naming
+    // ========================================================
+    function buildFileName() {
+      const now = new Date();
+      const date = now.toISOString().split('T')[0];
+      const time = now.toTimeString().split(' ')[0].replace(/:/g, '');
+      const safeName = guestName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+      const sid = sessionId || 'standalone';
+      return `${date}_${sid}_${safeName}_${time}.${fileExtension}`;
+    }
+
+    // ========================================================
+    // B2 Upload
+    // ========================================================
+    async function uploadToB2(blob, fileName) {
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '0%';
+
+      try {
+        // Request presigned PUT URL from server (generated at stop time)
+        let uploadUrl;
+
+        if (sessionId) {
+          const res = await fetch(`/api/sessions/${sessionId}/upload-url`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fileName, contentType: selectedMime })
+          });
+          if (!res.ok) throw new Error(`Failed to get upload URL: ${res.status}`);
+          const data = await res.json();
+          uploadUrl = data.url;
+        } else {
+          // Standalone mode — prompt user or use test URL
+          statusText.textContent = 'Standalone mode: no server to get upload URL. Downloading locally instead.';
+          statusText.className = 'status-msg status-complete';
+          downloadLocally(blob, fileName);
+          return;
+        }
+
+        // Use XMLHttpRequest for progress tracking
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('PUT', uploadUrl, true);
+          xhr.setRequestHeader('Content-Type', selectedMime);
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 100);
+              progressBar.style.width = `${pct}%`;
+              statusText.textContent = `Uploading... ${pct}%`;
+              // Report progress to producer
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'upload-progress', percent: pct }));
+              }
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+            } else {
+              reject(new Error(`Upload failed: ${xhr.status}`));
+            }
+          };
+
+          xhr.onerror = () => reject(new Error('Upload network error'));
+          xhr.send(blob);
+        });
+
+        // Success
+        progressBar.style.width = '100%';
+        statusText.textContent = 'Upload complete \u2014 you\'re all set! You can close this tab.';
+        statusText.className = 'status-msg status-complete';
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'upload-complete', fileName }));
+        }
+
+      } catch (err) {
+        console.error('Upload failed:', err);
+        statusText.textContent = `Upload failed: ${err.message}`;
+        statusText.className = 'status-msg status-error';
+
+        // Show retry button
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'btn btn-primary';
+        retryBtn.textContent = 'Retry Upload';
+        retryBtn.style.marginTop = '0.5rem';
+        retryBtn.addEventListener('click', () => {
+          retryBtn.remove();
+          uploadToB2(blob, fileName);
+        });
+        controls.style.display = 'flex';
+        controls.innerHTML = '';
+        controls.appendChild(retryBtn);
+
+        // Also offer local download as fallback
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'btn btn-success';
+        dlBtn.textContent = 'Download Locally';
+        dlBtn.addEventListener('click', () => downloadLocally(blob, fileName));
+        controls.appendChild(dlBtn);
+      }
+    }
+
+    function downloadLocally(blob, fileName) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      statusText.textContent = 'File downloaded locally. You can close this tab.';
+      statusText.className = 'status-msg status-complete';
+      progressContainer.style.display = 'none';
+    }
+
+    // ========================================================
+    // Error Handling
+    // ========================================================
+    function showError(err) {
+      nameScreen.style.display = 'none';
+      recordingScreen.style.display = 'none';
+      errorScreen.style.display = 'flex';
+
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        errorMsg.textContent = 'Camera/microphone permission was denied.';
+        errorInstructions.innerHTML = `
+          <strong>Chrome:</strong> Click the camera icon in the address bar, then select "Allow" and reload.<br><br>
+          <strong>Safari:</strong> Go to Safari > Settings > Websites > Camera/Microphone, set this site to "Allow", and reload.<br><br>
+          <strong>Edge:</strong> Click the lock icon in the address bar, toggle Camera and Microphone to "Allow", and reload.
+        `;
+      } else if (err.name === 'NotFoundError') {
+        errorMsg.textContent = 'No camera or microphone found.';
+        errorInstructions.innerHTML = 'Please connect a camera and microphone, then reload this page.';
+      } else if (err.name === 'NotReadableError') {
+        errorMsg.textContent = 'Camera or microphone is in use by another application.';
+        errorInstructions.innerHTML = 'Close other apps that might be using your camera (Zoom, FaceTime, etc.) and reload.';
+      } else {
+        errorMsg.textContent = `Could not access camera/microphone: ${err.message}`;
+        errorInstructions.innerHTML = 'Try using Chrome or Edge for the best experience.';
+      }
+    }
+
+    // ========================================================
+    // Prevent accidental tab close during recording/upload
+    // ========================================================
+    window.addEventListener('beforeunload', (e) => {
+      if (isRecording || progressContainer.style.display === 'block') {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+  </script>
+</body>
+</html>
