@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Fieldcast — Guest Recording</title>
+  <title>CamOp — Guest Recording</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -98,6 +98,14 @@
       border-radius: 4px;
       color: #888;
     }
+    .size-badge {
+      font-size: 0.7rem;
+      background: #2a2a2a;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      color: #888;
+    }
+    .size-badge.warn { background: #2d2305; color: #f59e0b; }
     .controls { display: flex; gap: 0.75rem; }
 
     /* Status messages */
@@ -162,7 +170,7 @@
 </head>
 <body>
   <div class="container">
-    <h1>Fieldcast</h1>
+    <h1>CamOp</h1>
     <p class="subtitle">Local Recording Agent</p>
 
     <!-- Name Entry Screen -->
@@ -187,6 +195,7 @@
         <span class="rec-dot"></span>
         <span class="timer" id="timer">00:00:00</span>
         <span class="codec-badge" id="codec-badge"></span>
+        <span class="size-badge" id="size-badge"></span>
       </div>
 
       <div class="controls" id="controls" style="display:none;">
@@ -207,7 +216,7 @@
 
   <script>
     // ========================================================
-    // STEP 1: Codec detection — log support before anything else
+    // Codec detection
     // ========================================================
     const MIME_PRIORITY = [
       'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
@@ -216,14 +225,8 @@
       'video/webm'
     ];
 
-    console.log('=== Fieldcast Codec Support ===');
-    MIME_PRIORITY.forEach(type => {
-      console.log(`${type}: ${MediaRecorder.isTypeSupported(type)}`);
-    });
-
     const selectedMime = MIME_PRIORITY.find(t => MediaRecorder.isTypeSupported(t));
     const fileExtension = selectedMime && selectedMime.includes('webm') ? 'webm' : 'mp4';
-    console.log(`Selected: ${selectedMime} (.${fileExtension})`);
 
     // ========================================================
     // State
@@ -236,10 +239,11 @@
     let timerInterval = null;
     let ws = null;
     let wsReconnectTimer = null;
+    let reconnectAttempts = 0;
     let isRecording = false;
+    let isUploading = false;
     let sessionId = null;
 
-    // Extract session ID from URL
     const urlParams = new URLSearchParams(window.location.search);
     sessionId = urlParams.get('session');
 
@@ -255,6 +259,7 @@
     const recBar = document.getElementById('rec-bar');
     const timerEl = document.getElementById('timer');
     const codecBadge = document.getElementById('codec-badge');
+    const sizeBadge = document.getElementById('size-badge');
     const controls = document.getElementById('controls');
     const stopBtn = document.getElementById('stop-btn');
     const progressContainer = document.getElementById('progress-container');
@@ -309,7 +314,6 @@
     // ========================================================
     function connectWebSocket() {
       if (!sessionId) {
-        // No session ID — standalone mode (Phase 1 testing)
         statusText.textContent = 'Standalone mode — click Start to begin recording';
         statusText.className = 'status-msg status-waiting';
         showStandaloneControls();
@@ -317,13 +321,14 @@
       }
 
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${location.host}/ws?session=${sessionId}`;
+      const wsUrl = `${wsProtocol}//${location.host}/ws?session=${sessionId}&role=guest`;
 
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         connectionBar.style.display = 'none';
-        clearInterval(wsReconnectTimer);
+        reconnectAttempts = 0;
+        clearTimeout(wsReconnectTimer);
         ws.send(JSON.stringify({ type: 'guest-join', name: guestName }));
       };
 
@@ -333,30 +338,27 @@
       };
 
       ws.onclose = () => {
-        if (isRecording) {
-          // Recording continues — WebSocket is independent
+        if (isRecording || isUploading) {
           connectionBar.style.display = 'flex';
           attemptReconnect();
         }
       };
 
-      ws.onerror = () => {
-        // Error will trigger onclose
-      };
+      ws.onerror = () => {};
     }
 
     function attemptReconnect() {
-      let attempts = 0;
-      wsReconnectTimer = setInterval(() => {
-        attempts++;
-        if (attempts > 10) {
-          clearInterval(wsReconnectTimer);
-          connectionBar.textContent = '\u26A0 Connection lost. Use the Stop button to save your recording.';
-          controls.style.display = 'flex';
-          return;
-        }
+      reconnectAttempts++;
+      if (reconnectAttempts > 15) {
+        connectionBar.textContent = '\u26A0 Connection lost. Use the Stop button to save your recording.';
+        controls.style.display = 'flex';
+        return;
+      }
+      // Exponential backoff: 1s, 2s, 4s, 8s... max 15s
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 15000);
+      wsReconnectTimer = setTimeout(() => {
         connectWebSocket();
-      }, 3000);
+      }, delay);
     }
 
     function handleServerMessage(msg) {
@@ -371,7 +373,7 @@
     }
 
     // ========================================================
-    // Standalone controls (Phase 1 / no WebSocket)
+    // Standalone controls
     // ========================================================
     function showStandaloneControls() {
       const startBtn = document.createElement('button');
@@ -401,7 +403,7 @@
 
       mediaRecorder = new MediaRecorder(mediaStream, {
         mimeType: selectedMime,
-        videoBitsPerSecond: 4_000_000 // 4 Mbps
+        videoBitsPerSecond: 4_000_000
       });
 
       mediaRecorder.ondataavailable = (e) => {
@@ -412,11 +414,10 @@
         handleRecordingStopped();
       };
 
-      mediaRecorder.start(1000); // 1-second chunks
+      mediaRecorder.start(1000);
       isRecording = true;
       recordingStartTime = Date.now();
 
-      // Update UI
       statusText.textContent = 'Recording in progress';
       statusText.className = 'status-msg status-recording';
       recBar.style.display = 'flex';
@@ -428,7 +429,6 @@
 
       startTimer();
 
-      // Notify producer
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'recording-started' }));
       }
@@ -457,7 +457,7 @@
     }
 
     // ========================================================
-    // Timer
+    // Timer + file size tracking
     // ========================================================
     function startTimer() {
       timerInterval = setInterval(() => {
@@ -466,6 +466,17 @@
         const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
         const s = String(elapsed % 60).padStart(2, '0');
         timerEl.textContent = `${h}:${m}:${s}`;
+
+        // Show estimated file size
+        const totalBytes = recordedChunks.reduce((sum, c) => sum + c.size, 0);
+        const mb = (totalBytes / (1024 * 1024)).toFixed(0);
+        sizeBadge.textContent = `~${mb} MB`;
+        if (totalBytes > 1.8 * 1024 * 1024 * 1024) {
+          sizeBadge.className = 'size-badge warn';
+          sizeBadge.textContent = `~${mb} MB (large!)`;
+        } else {
+          sizeBadge.className = 'size-badge';
+        }
       }, 500);
     }
 
@@ -486,14 +497,17 @@
     }
 
     // ========================================================
-    // B2 Upload
+    // B2 Upload with timeout and auto-retry
     // ========================================================
-    async function uploadToB2(blob, fileName) {
+    const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    const MAX_UPLOAD_RETRIES = 3;
+
+    async function uploadToB2(blob, fileName, attempt = 1) {
+      isUploading = true;
       progressContainer.style.display = 'block';
       progressBar.style.width = '0%';
 
       try {
-        // Request presigned PUT URL from server (generated at stop time)
         let uploadUrl;
 
         if (sessionId) {
@@ -506,25 +520,24 @@
           const data = await res.json();
           uploadUrl = data.url;
         } else {
-          // Standalone mode — prompt user or use test URL
-          statusText.textContent = 'Standalone mode: no server to get upload URL. Downloading locally instead.';
+          statusText.textContent = 'Standalone mode: downloading locally.';
           statusText.className = 'status-msg status-complete';
           downloadLocally(blob, fileName);
+          isUploading = false;
           return;
         }
 
-        // Use XMLHttpRequest for progress tracking
         await new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
           xhr.open('PUT', uploadUrl, true);
           xhr.setRequestHeader('Content-Type', selectedMime);
+          xhr.timeout = UPLOAD_TIMEOUT_MS;
 
           xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
               const pct = Math.round((e.loaded / e.total) * 100);
               progressBar.style.width = `${pct}%`;
               statusText.textContent = `Uploading... ${pct}%`;
-              // Report progress to producer
               if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'upload-progress', percent: pct }));
               }
@@ -535,15 +548,17 @@
             if (xhr.status >= 200 && xhr.status < 300) {
               resolve();
             } else {
-              reject(new Error(`Upload failed: ${xhr.status}`));
+              reject(new Error(`Upload failed: HTTP ${xhr.status}`));
             }
           };
 
+          xhr.ontimeout = () => reject(new Error('Upload timed out (5 min limit)'));
           xhr.onerror = () => reject(new Error('Upload network error'));
           xhr.send(blob);
         });
 
         // Success
+        isUploading = false;
         progressBar.style.width = '100%';
         statusText.textContent = 'Upload complete \u2014 you\'re all set! You can close this tab.';
         statusText.className = 'status-msg status-complete';
@@ -553,24 +568,34 @@
         }
 
       } catch (err) {
-        console.error('Upload failed:', err);
-        statusText.textContent = `Upload failed: ${err.message}`;
+        console.error(`Upload attempt ${attempt} failed:`, err);
+
+        // Auto-retry with backoff
+        if (attempt < MAX_UPLOAD_RETRIES) {
+          const waitSec = attempt * 2;
+          statusText.textContent = `Upload failed (attempt ${attempt}/${MAX_UPLOAD_RETRIES}). Retrying in ${waitSec}s...`;
+          statusText.className = 'status-msg status-error';
+          await new Promise(r => setTimeout(r, waitSec * 1000));
+          return uploadToB2(blob, fileName, attempt + 1);
+        }
+
+        // All retries exhausted — show manual controls
+        isUploading = false;
+        statusText.textContent = `Upload failed after ${MAX_UPLOAD_RETRIES} attempts: ${err.message}`;
         statusText.className = 'status-msg status-error';
 
-        // Show retry button
+        controls.style.display = 'flex';
+        controls.innerHTML = '';
+
         const retryBtn = document.createElement('button');
         retryBtn.className = 'btn btn-primary';
         retryBtn.textContent = 'Retry Upload';
-        retryBtn.style.marginTop = '0.5rem';
         retryBtn.addEventListener('click', () => {
-          retryBtn.remove();
-          uploadToB2(blob, fileName);
+          controls.style.display = 'none';
+          uploadToB2(blob, fileName, 1);
         });
-        controls.style.display = 'flex';
-        controls.innerHTML = '';
         controls.appendChild(retryBtn);
 
-        // Also offer local download as fallback
         const dlBtn = document.createElement('button');
         dlBtn.className = 'btn btn-success';
         dlBtn.textContent = 'Download Locally';
@@ -622,7 +647,7 @@
     // Prevent accidental tab close during recording/upload
     // ========================================================
     window.addEventListener('beforeunload', (e) => {
-      if (isRecording || progressContainer.style.display === 'block') {
+      if (isRecording || isUploading) {
         e.preventDefault();
         e.returnValue = '';
       }

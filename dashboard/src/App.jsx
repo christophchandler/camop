@@ -6,7 +6,10 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [sessionName, setSessionName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef(null);
+  const reconnectTimer = useRef(null);
+  const reconnectDelay = useRef(1000);
 
   // Fetch existing sessions on mount
   useEffect(() => {
@@ -16,30 +19,54 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // WebSocket connection for the active session
+  // WebSocket connection for the active session with reconnect
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId) {
+      setWsConnected(false);
+      return;
+    }
 
-    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${wsProtocol}//${location.host}/ws?session=${activeSessionId}&role=producer`);
-    wsRef.current = ws;
+    function connect() {
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${wsProtocol}//${location.host}/ws?session=${activeSessionId}&role=producer`);
+      wsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'session-state') {
-        setSessions(prev =>
-          prev.map(s => s.id === msg.session.id ? msg.session : s)
-        );
-      }
-    };
+      ws.onopen = () => {
+        setWsConnected(true);
+        reconnectDelay.current = 1000; // reset backoff
+        clearTimeout(reconnectTimer.current);
+      };
 
-    ws.onclose = () => {
-      wsRef.current = null;
-    };
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'session-state') {
+          setSessions(prev =>
+            prev.map(s => s.id === msg.session.id ? msg.session : s)
+          );
+        }
+      };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        setWsConnected(false);
+        // Auto-reconnect with exponential backoff
+        reconnectTimer.current = setTimeout(() => {
+          reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
+          connect();
+        }, reconnectDelay.current);
+      };
+
+      ws.onerror = () => {};
+    }
+
+    connect();
 
     return () => {
-      ws.close();
-      wsRef.current = null;
+      clearTimeout(reconnectTimer.current);
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [activeSessionId]);
 
@@ -73,9 +100,19 @@ export default function App() {
   return (
     <div className="min-h-screen p-6 max-w-4xl mx-auto">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white">Fieldcast</h1>
-        <p className="text-sm text-gray-500">Producer Dashboard</p>
+      <div className="mb-8 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">CamOp</h1>
+          <p className="text-sm text-gray-500">Producer Dashboard</p>
+        </div>
+        {activeSessionId && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`} />
+            <span className={wsConnected ? 'text-green-400' : 'text-red-400'}>
+              {wsConnected ? 'Connected' : 'Reconnecting...'}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Create Session */}

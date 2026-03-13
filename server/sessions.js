@@ -33,6 +33,10 @@ function getAllSessions() {
   return result;
 }
 
+function sessionCount() {
+  return sessions.size;
+}
+
 function addGuestToSession(sessionId, guestId, name, ws) {
   const session = sessions.get(sessionId);
   if (!session) return null;
@@ -72,6 +76,10 @@ function addLog(session, message) {
     time: new Date().toISOString(),
     message
   });
+  // Cap log at 500 entries to prevent memory growth
+  if (session.log.length > 500) {
+    session.log = session.log.slice(-500);
+  }
 }
 
 function serializeSession(session) {
@@ -81,7 +89,8 @@ function serializeSession(session) {
       id: guestId,
       name: guest.name,
       status: guest.status,
-      fileName: guest.fileName
+      fileName: guest.fileName,
+      uploadProgress: guest.uploadProgress
     });
   }
   return {
@@ -93,12 +102,35 @@ function serializeSession(session) {
   };
 }
 
+function cleanupExpiredSessions(ttlMs) {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [id, session] of sessions) {
+    const age = now - new Date(session.createdAt).getTime();
+    if (age > ttlMs) {
+      // Close any remaining WebSocket connections for this session's guests
+      for (const [, guest] of session.guests) {
+        if (guest.ws && guest.ws.readyState === 1) {
+          guest.ws.close(1001, 'Session expired');
+        }
+      }
+      sessions.delete(id);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`Cleaned up ${cleaned} expired session(s). ${sessions.size} remaining.`);
+  }
+}
+
 module.exports = {
   createSession,
   getSession,
   getAllSessions,
+  sessionCount,
   addGuestToSession,
   removeGuestFromSession,
   updateGuestStatus,
-  serializeSession
+  serializeSession,
+  cleanupExpiredSessions
 };

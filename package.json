@@ -1,0 +1,13 @@
+{
+  "name": "camop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CamOp — remote recording orchestration",
+  "scripts": {
+    "dev": "cd server && node --watch index.js",
+    "dev:dashboard": "cd dashboard && npm run dev",
+    "build": "cd dashboard && npm run build",
+    "start": "cd server && node index.js",
+    "install:all": "cd server && npm install && cd ../dashboard && npm install"
+  }
+}

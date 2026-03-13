@@ -1,0 +1,8 @@
+node_modules
+.env
+*.pem
+.DS_Store
+.git
+.claude
+dashboard/node_modules
+server/node_modules
