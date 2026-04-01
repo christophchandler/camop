@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const sessions = new Map();
 
 function generateId() {
-  return crypto.randomBytes(4).toString('hex'); // 8-char hex
+  return crypto.randomBytes(3).toString('hex'); // 6-char hex
 }
 
 function createSession(name) {
@@ -13,7 +13,7 @@ function createSession(name) {
     id,
     name,
     createdAt: new Date().toISOString(),
-    guests: new Map(), // guestId -> { name, status, ws, fileName }
+    guests: new Map(), // guestId -> guest object
     log: []
   };
   sessions.set(id, session);
@@ -43,9 +43,20 @@ function addGuestToSession(sessionId, guestId, name, ws) {
 
   session.guests.set(guestId, {
     name,
-    status: 'connected',
+    status: 'connected',    // connected | setting-up | ready | recording | uploading | done
     ws,
-    fileName: null
+    // Control state
+    muted: false,
+    cameraOff: false,
+    screenSharing: false,
+    activeCamera: null,
+    activeMic: null,
+    // Files from this session (camera + screen + restarts)
+    files: [],
+    // Current upload progress
+    uploadProgress: null,
+    // Pending producer request
+    pendingRequest: null     // { requestType, timestamp } or null
   });
   addLog(session, `${name} connected`);
   return session;
@@ -71,12 +82,41 @@ function updateGuestStatus(sessionId, guestId, status, extra = {}) {
   addLog(session, `${guest.name}: ${status}`);
 }
 
+function updateGuestControls(sessionId, guestId, controls) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const guest = session.guests.get(guestId);
+  if (!guest) return;
+  if (controls.muted !== undefined) guest.muted = controls.muted;
+  if (controls.cameraOff !== undefined) guest.cameraOff = controls.cameraOff;
+  if (controls.screenSharing !== undefined) guest.screenSharing = controls.screenSharing;
+  if (controls.activeCamera !== undefined) guest.activeCamera = controls.activeCamera;
+  if (controls.activeMic !== undefined) guest.activeMic = controls.activeMic;
+}
+
+function setGuestPendingRequest(sessionId, guestId, requestType) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const guest = session.guests.get(guestId);
+  if (!guest) return;
+  guest.pendingRequest = requestType
+    ? { requestType, timestamp: Date.now() }
+    : null;
+}
+
+function addGuestFile(sessionId, guestId, fileInfo) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const guest = session.guests.get(guestId);
+  if (!guest) return;
+  guest.files.push(fileInfo);
+}
+
 function addLog(session, message) {
   session.log.push({
     time: new Date().toISOString(),
     message
   });
-  // Cap log at 500 entries to prevent memory growth
   if (session.log.length > 500) {
     session.log = session.log.slice(-500);
   }
@@ -89,8 +129,14 @@ function serializeSession(session) {
       id: guestId,
       name: guest.name,
       status: guest.status,
-      fileName: guest.fileName,
-      uploadProgress: guest.uploadProgress
+      muted: guest.muted,
+      cameraOff: guest.cameraOff,
+      screenSharing: guest.screenSharing,
+      activeCamera: guest.activeCamera,
+      activeMic: guest.activeMic,
+      files: guest.files,
+      uploadProgress: guest.uploadProgress,
+      pendingRequest: guest.pendingRequest
     });
   }
   return {
@@ -108,7 +154,6 @@ function cleanupExpiredSessions(ttlMs) {
   for (const [id, session] of sessions) {
     const age = now - new Date(session.createdAt).getTime();
     if (age > ttlMs) {
-      // Close any remaining WebSocket connections for this session's guests
       for (const [, guest] of session.guests) {
         if (guest.ws && guest.ws.readyState === 1) {
           guest.ws.close(1001, 'Session expired');
@@ -131,6 +176,9 @@ module.exports = {
   addGuestToSession,
   removeGuestFromSession,
   updateGuestStatus,
+  updateGuestControls,
+  setGuestPendingRequest,
+  addGuestFile,
   serializeSession,
   cleanupExpiredSessions
 };

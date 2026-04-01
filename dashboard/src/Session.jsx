@@ -9,97 +9,123 @@ export default function Session({ session, sendCommand }) {
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(magicLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback
       const input = document.createElement('input');
       input.value = magicLink;
       document.body.appendChild(input);
       input.select();
       document.execCommand('copy');
       document.body.removeChild(input);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
+  const hasReadyGuests = session.guests.some(g => g.status === 'ready');
   const hasRecordingGuests = session.guests.some(g => g.status === 'recording');
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Session Header */}
-      <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-        <h2 className="text-lg font-semibold text-white mb-1">{session.name}</h2>
-        <p className="text-xs text-gray-500 mb-4">Session ID: {session.id}</p>
+      <div className="glass p-6 animate-slide-up">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-bold text-white mb-1">{session.name}</h2>
+            <p className="text-xs text-gray-500 font-mono">ID: {session.id}</p>
+          </div>
+          <div className="flex gap-2">
+            {hasReadyGuests && (
+              <button
+                onClick={() => sendCommand('start-recording', { guestId: 'all' })}
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-emerald-500/20"
+                style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}
+              >
+                Start All
+              </button>
+            )}
+            {hasRecordingGuests && (
+              <button
+                onClick={() => sendCommand('stop-recording', { guestId: 'all' })}
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-white bg-red-500 hover:bg-red-400 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-red-500/20"
+              >
+                Stop All
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* Magic Link */}
-        <div className="bg-gray-800 rounded-lg p-3 flex items-center gap-3">
-          <div className="flex-1 text-sm text-gray-300 truncate font-mono">{magicLink}</div>
+        <div className="bg-white/[0.03] rounded-xl p-1 flex items-center gap-1 border border-white/[0.06]">
+          <div className="flex-1 px-3 py-2 text-sm text-gray-400 truncate font-mono select-all">{magicLink}</div>
           <button
             onClick={copyLink}
-            className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-4 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap"
+            className={`px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all duration-300 ${
+              copied
+                ? 'bg-emerald-500/20 text-emerald-400'
+                : 'btn-brand'
+            }`}
           >
-            {copied ? 'Copied!' : 'Copy Link'}
+            {copied ? (
+              <span className="flex items-center gap-1.5">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                Copied!
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+                Copy Link
+              </span>
+            )}
           </button>
         </div>
-        <p className="text-xs text-gray-500 mt-2">Drop this link in your meeting chat. Guests click it to join.</p>
+        <p className="text-xs text-gray-600 mt-2 ml-1">Drop this link in your meeting chat. Guests click it to join.</p>
       </div>
-
-      {/* Global Controls */}
-      {session.guests.length > 0 && (
-        <div className="flex gap-3">
-          <button
-            onClick={() => sendCommand('start-recording', { guestId: 'all' })}
-            className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-          >
-            Start All
-          </button>
-          {hasRecordingGuests && (
-            <button
-              onClick={() => sendCommand('stop-recording', { guestId: 'all' })}
-              className="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-            >
-              Stop All
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Guest Tiles */}
       {session.guests.length === 0 ? (
-        <div className="bg-gray-900 rounded-xl p-8 border border-gray-800 text-center">
-          <p className="text-gray-500">Waiting for guests to connect...</p>
-          <p className="text-xs text-gray-600 mt-1">Share the magic link above in your meeting chat.</p>
+        <div className="glass p-12 text-center animate-slide-up" style={{ animationDelay: '0.1s', animationFillMode: 'both' }}>
+          <div className="text-4xl mb-4 animate-float">📡</div>
+          <p className="text-gray-400 font-medium mb-1">Waiting for guests to connect...</p>
+          <p className="text-xs text-gray-600">Share the magic link above in your meeting chat.</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {session.guests.map(guest => (
-            <GuestTile
-              key={guest.id}
-              guest={guest}
-              sessionId={session.id}
-              sendCommand={sendCommand}
-            />
+          {session.guests.map((guest, i) => (
+            <div key={guest.id} className="animate-slide-up" style={{ animationDelay: `${i * 0.05}s`, animationFillMode: 'both' }}>
+              <GuestTile
+                guest={guest}
+                sessionId={session.id}
+                sendCommand={sendCommand}
+              />
+            </div>
           ))}
         </div>
       )}
 
       {/* Session Log */}
       {session.log.length > 0 && (
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Session Log</h3>
-          <div className="space-y-1 max-h-48 overflow-y-auto">
+        <details className="glass group animate-slide-up" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
+          <summary className="px-5 py-3 cursor-pointer text-xs font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors flex items-center justify-between select-none">
+            Session Log
+            <svg className="w-4 h-4 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </summary>
+          <div className="px-5 pb-4 space-y-1 max-h-48 overflow-y-auto">
             {session.log.slice().reverse().map((entry, i) => (
-              <div key={i} className="text-xs flex gap-3">
+              <div key={i} className="text-xs flex gap-3 py-0.5">
                 <span className="text-gray-600 font-mono whitespace-nowrap">
                   {new Date(entry.time).toLocaleTimeString()}
                 </span>
-                <span className="text-gray-400">{entry.message}</span>
+                <span className="text-gray-500">{entry.message}</span>
               </div>
             ))}
           </div>
-        </div>
+        </details>
       )}
     </div>
   );

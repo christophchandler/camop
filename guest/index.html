@@ -3,214 +3,588 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CamOp — Guest Recording</title>
+  <title>CamOp — Recording</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --brand: #f97316;
+      --brand-glow: rgba(249, 115, 22, 0.15);
+      --surface: rgba(255, 255, 255, 0.04);
+      --surface-hover: rgba(255, 255, 255, 0.07);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(255, 255, 255, 0.12);
+    }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f0f0f;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0b;
       color: #e0e0e0;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
+
+    ::selection { background: rgba(249, 115, 22, 0.3); color: #fff; }
+
+    /* ========== Animations ========== */
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    @keyframes gradient { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+    @keyframes glow { 0% { box-shadow: 0 0 20px var(--brand-glow); } 100% { box-shadow: 0 0 40px rgba(249, 115, 22, 0.3); } }
+    @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes meterPulse { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
+
+    .animate-fade { animation: fadeIn 0.3s ease-out; }
+    .animate-slide { animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+    .animate-float { animation: float 6s ease-in-out infinite; }
+
+    /* ========== Glass ========== */
+    .glass {
+      background: var(--surface);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+    }
+
+    /* ========== Container ========== */
     .container {
       max-width: 640px;
       width: 100%;
       padding: 2rem;
       text-align: center;
-    }
-    h1 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      margin-bottom: 0.25rem;
-      color: #fff;
-    }
-    .subtitle {
-      font-size: 0.85rem;
-      color: #888;
-      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
     }
 
-    /* Name entry */
-    #name-screen { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+    /* ========== Background ========== */
+    .bg-effects {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+      z-index: 0;
+    }
+    .bg-orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+    }
+    .bg-orb-1 { width: 400px; height: 400px; top: 10%; left: -10%; background: rgba(249, 115, 22, 0.06); animation: float 8s ease-in-out infinite; }
+    .bg-orb-2 { width: 350px; height: 350px; bottom: 10%; right: -10%; background: rgba(239, 68, 68, 0.04); animation: float 8s ease-in-out infinite reverse; }
+    .bg-grid {
+      position: absolute;
+      inset: 0;
+      opacity: 0.025;
+      background-image: linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px);
+      background-size: 64px 64px;
+    }
+
+    /* ========== Logo ========== */
+    .logo {
+      font-size: 1.75rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #fb923c, #f97316, #ea580c);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.25rem;
+    }
+    .subtitle { font-size: 0.8rem; color: #555; margin-bottom: 2rem; font-weight: 400; }
+
+    /* ========== Name Entry ========== */
+    #name-screen { display: flex; flex-direction: column; align-items: center; gap: 1.25rem; }
     #name-input {
-      background: #1a1a1a;
-      border: 1px solid #333;
-      border-radius: 8px;
-      padding: 0.75rem 1rem;
-      font-size: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem 1.25rem;
+      font-size: 0.95rem;
       color: #fff;
       width: 100%;
       max-width: 320px;
       text-align: center;
       outline: none;
+      font-family: inherit;
+      transition: all 0.3s;
     }
-    #name-input:focus { border-color: #4a9eff; }
+    #name-input:focus { border-color: rgba(249, 115, 22, 0.5); background: rgba(255,255,255,0.06); box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1); }
     #name-input::placeholder { color: #555; }
 
-    /* Buttons */
+    /* ========== Buttons ========== */
     .btn {
       border: none;
-      border-radius: 8px;
-      padding: 0.75rem 1.5rem;
-      font-size: 1rem;
-      font-weight: 500;
+      border-radius: 12px;
+      padding: 0.8rem 1.75rem;
+      font-size: 0.95rem;
+      font-weight: 600;
       cursor: pointer;
-      transition: opacity 0.15s;
+      transition: all 0.3s;
+      font-family: inherit;
+      position: relative;
+      overflow: hidden;
     }
-    .btn:hover { opacity: 0.85; }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-primary { background: #4a9eff; color: #fff; }
-    .btn-danger { background: #ef4444; color: #fff; }
-    .btn-success { background: #22c55e; color: #fff; }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
-    /* Recording screen */
-    #recording-screen { display: none; flex-direction: column; align-items: center; gap: 1rem; }
+    .btn-brand {
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      color: #fff;
+    }
+    .btn-brand:hover { box-shadow: 0 8px 24px rgba(249, 115, 22, 0.25); }
+
+    .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; }
+    .btn-danger:hover { box-shadow: 0 8px 24px rgba(239, 68, 68, 0.25); }
+
+    .btn-success { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; }
+    .btn-success:hover { box-shadow: 0 8px 24px rgba(34, 197, 94, 0.25); }
+
+    .btn-ghost { background: var(--surface); color: #aaa; border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--surface-hover); color: #fff; }
+
+    .btn-sm { padding: 0.45rem 0.85rem; font-size: 0.8rem; border-radius: 10px; }
+
+    /* ========== Recording Screen ========== */
+    #recording-screen { display: none; flex-direction: column; align-items: center; gap: 1rem; width: 100%; }
     #video-preview {
       width: 100%;
       max-width: 560px;
-      border-radius: 12px;
-      background: #1a1a1a;
+      border-radius: 16px;
+      background: #111;
       transform: scaleX(-1);
+      border: 1px solid var(--border);
     }
-    .status-bar {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      font-size: 0.95rem;
-    }
-    .rec-dot {
-      width: 12px;
-      height: 12px;
-      background: #ef4444;
-      border-radius: 50%;
-      animation: pulse 1s ease-in-out infinite;
-    }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-    .timer { font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Menlo', monospace; color: #fff; }
-    .codec-badge {
-      font-size: 0.7rem;
-      background: #2a2a2a;
-      padding: 0.2rem 0.5rem;
-      border-radius: 4px;
-      color: #888;
-    }
-    .size-badge {
-      font-size: 0.7rem;
-      background: #2a2a2a;
-      padding: 0.2rem 0.5rem;
-      border-radius: 4px;
-      color: #888;
-    }
-    .size-badge.warn { background: #2d2305; color: #f59e0b; }
-    .controls { display: flex; gap: 0.75rem; }
 
-    /* Status messages */
+    /* ========== Status Messages ========== */
     .status-msg {
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      font-size: 0.9rem;
+      padding: 0.8rem 1.25rem;
+      border-radius: 12px;
+      font-size: 0.85rem;
       width: 100%;
       max-width: 480px;
+      font-weight: 500;
     }
-    .status-waiting { background: #1a2332; color: #4a9eff; }
-    .status-recording { background: #2d1215; color: #ef4444; }
-    .status-uploading { background: #1a2332; color: #4a9eff; }
-    .status-complete { background: #0f2918; color: #22c55e; }
-    .status-error { background: #2d1215; color: #ef4444; }
+    .status-waiting { background: rgba(249, 115, 22, 0.06); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.12); }
+    .status-recording { background: rgba(239, 68, 68, 0.06); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.12); }
+    .status-uploading { background: rgba(249, 115, 22, 0.06); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.12); }
+    .status-complete { background: rgba(34, 197, 94, 0.06); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.12); }
+    .status-error { background: rgba(239, 68, 68, 0.06); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.12); }
 
-    /* Progress bar */
+    /* ========== Recording Bar ========== */
+    .rec-bar { display: flex; align-items: center; gap: 0.75rem; font-size: 0.9rem; }
+    .rec-dot { width: 10px; height: 10px; background: #ef4444; border-radius: 50%; animation: pulse 1.5s ease-in-out infinite; box-shadow: 0 0 12px rgba(239, 68, 68, 0.4); }
+    .timer { font-variant-numeric: tabular-nums; font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace; color: #fff; font-weight: 500; font-size: 0.85rem; }
+    .badge {
+      font-size: 0.65rem;
+      background: var(--surface);
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      color: #666;
+      border: 1px solid var(--border);
+      font-weight: 500;
+    }
+    .badge.warn { background: rgba(245, 158, 11, 0.06); color: #f59e0b; border-color: rgba(245, 158, 11, 0.15); }
+
+    /* ========== Progress Bar ========== */
     .progress-container {
       width: 100%;
       max-width: 480px;
-      background: #1a1a1a;
+      background: var(--surface);
       border-radius: 8px;
       overflow: hidden;
-      height: 8px;
+      height: 6px;
       display: none;
     }
     .progress-bar {
       height: 100%;
-      background: #4a9eff;
       width: 0%;
-      transition: width 0.3s;
+      transition: width 0.5s ease;
+      background: linear-gradient(90deg, #f97316, #ea580c);
+      border-radius: 8px;
     }
 
-    /* Connection indicator */
-    .connection-bar {
+    /* ========== Connection & Warning Bars ========== */
+    .info-bar {
       display: none;
       align-items: center;
       gap: 0.5rem;
       font-size: 0.8rem;
-      color: #f59e0b;
-      background: #2d2305;
-      padding: 0.5rem 1rem;
-      border-radius: 6px;
+      padding: 0.6rem 1rem;
+      border-radius: 10px;
       width: 100%;
       max-width: 480px;
+      font-weight: 500;
     }
+    .info-bar-warn { color: #f59e0b; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.12); }
+    .info-bar-error { color: #f87171; background: rgba(239, 68, 68, 0.06); border: 1px solid rgba(239, 68, 68, 0.12); }
 
-    /* Error screen */
+    /* ========== Error Screen ========== */
     #error-screen { display: none; flex-direction: column; align-items: center; gap: 1rem; }
     .error-instructions {
       text-align: left;
-      background: #1a1a1a;
-      padding: 1rem 1.5rem;
-      border-radius: 8px;
+      background: var(--surface);
+      padding: 1.25rem 1.5rem;
+      border-radius: 12px;
       font-size: 0.85rem;
-      line-height: 1.6;
+      line-height: 1.7;
       max-width: 480px;
       width: 100%;
+      border: 1px solid var(--border);
     }
     .error-instructions strong { color: #fff; }
+
+    /* ========== Device Setup Modal ========== */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-backdrop.active { display: flex; }
+    .modal {
+      background: #141416;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2rem;
+      max-width: 480px;
+      width: 90%;
+      max-height: 90vh;
+      overflow-y: auto;
+      animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .modal h2 {
+      font-size: 1.25rem;
+      color: #fff;
+      font-weight: 700;
+      margin-bottom: 0.35rem;
+    }
+    .modal .modal-sub {
+      font-size: 0.8rem;
+      color: #666;
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+    .modal-preview {
+      width: 100%;
+      border-radius: 12px;
+      background: #0a0a0b;
+      transform: scaleX(-1);
+      margin-bottom: 1.25rem;
+      border: 1px solid var(--border);
+    }
+    .modal label {
+      display: block;
+      font-size: 0.7rem;
+      color: #777;
+      margin-bottom: 0.35rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .modal select {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.65rem 0.85rem;
+      color: #fff;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      outline: none;
+      font-family: inherit;
+      transition: all 0.3s;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23666' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6l3.5 4 3.5-4z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+    }
+    .modal select:focus { border-color: rgba(249, 115, 22, 0.5); box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1); }
+
+    /* Audio Level Meter */
+    .meter-container {
+      width: 100%;
+      height: 6px;
+      background: var(--surface);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      border: 1px solid var(--border);
+    }
+    .meter-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #22c55e, #4ade80);
+      transition: width 0.08s;
+      border-radius: 4px;
+    }
+
+    .modal-error {
+      font-size: 0.8rem;
+      color: #f87171;
+      background: rgba(239, 68, 68, 0.06);
+      border: 1px solid rgba(239, 68, 68, 0.12);
+      padding: 0.6rem 0.85rem;
+      border-radius: 10px;
+      margin-bottom: 1rem;
+      font-weight: 500;
+    }
+
+    /* ========== Toolbar ========== */
+    .toolbar-wrapper {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+    }
+    .toolbar-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #f59e0b;
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.12);
+      border-bottom: none;
+      padding: 0.3rem 1rem;
+      border-radius: 8px 8px 0 0;
+      letter-spacing: 0.02em;
+    }
+    .toolbar {
+      background: rgba(20, 20, 22, 0.95);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.5rem;
+      width: 100%;
+    }
+    .tb-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.2rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.65rem 1rem;
+      min-width: 64px;
+      cursor: pointer;
+      color: #aaa;
+      font-size: 0.6rem;
+      font-weight: 600;
+      font-family: inherit;
+      transition: all 0.25s;
+      letter-spacing: 0.02em;
+    }
+    .tb-btn:hover { background: var(--surface-hover); color: #fff; border-color: var(--border-hover); transform: translateY(-1px); }
+    .tb-btn.active { background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.3); color: #f87171; }
+    .tb-btn.screen-active { background: rgba(34, 197, 94, 0.15); border-color: rgba(34, 197, 94, 0.3); color: #4ade80; }
+    .tb-btn .icon { font-size: 1.2rem; }
+
+    /* Device Dropdown */
+    .dev-dropdown {
+      display: none;
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #141416;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.4rem;
+      min-width: 220px;
+      z-index: 60;
+      margin-bottom: 0.5rem;
+      animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    }
+    .dev-dropdown.show { display: block; }
+    .dev-dropdown-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: none;
+      color: #aaa;
+      padding: 0.55rem 0.85rem;
+      font-size: 0.8rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+    .dev-dropdown-item:hover { background: var(--surface-hover); color: #fff; }
+    .dev-dropdown-item.selected { color: #fb923c; }
+
+    /* Screen Thumbnail */
+    .screen-thumb-container {
+      display: none;
+      position: fixed;
+      bottom: 85px;
+      right: 16px;
+      z-index: 40;
+      animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .screen-thumb {
+      width: 180px;
+      border-radius: 10px;
+      border: 2px solid rgba(34, 197, 94, 0.4);
+      background: #0a0a0b;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    }
+    .screen-thumb-label { font-size: 0.6rem; color: #4ade80; text-align: center; margin-top: 0.3rem; font-weight: 600; letter-spacing: 0.03em; }
+
+    /* ========== Toast ========== */
+    .toast-container {
+      position: fixed;
+      bottom: 95px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 70;
+      display: none;
+    }
+    .toast-container.show { display: block; animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+    .toast {
+      background: #1e1e22;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.1rem 1.25rem;
+      min-width: 300px;
+      max-width: 420px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    }
+    .toast-text { font-size: 0.85rem; color: #e0e0e0; margin-bottom: 0.85rem; font-weight: 500; line-height: 1.4; }
+    .toast-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>CamOp</h1>
+  <div class="bg-effects">
+    <div class="bg-orb bg-orb-1"></div>
+    <div class="bg-orb bg-orb-2"></div>
+    <div class="bg-grid"></div>
+  </div>
+
+  <div class="container" id="main-container">
+    <div class="logo">CamOp</div>
     <p class="subtitle">Local Recording Agent</p>
 
-    <!-- Name Entry Screen -->
     <div id="name-screen">
       <input type="text" id="name-input" placeholder="What's your name?" maxlength="60" autofocus>
-      <button class="btn btn-primary" id="join-btn" disabled>Join Session</button>
+      <button class="btn btn-brand" id="join-btn" disabled>Join Session</button>
     </div>
 
-    <!-- Recording Screen -->
     <div id="recording-screen">
       <video id="video-preview" autoplay muted playsinline></video>
-
-      <div class="connection-bar" id="connection-bar">
-        &#x26A0; Connection lost — reconnecting...
-      </div>
-
-      <div class="status-bar" id="status-bar">
+      <div class="info-bar info-bar-warn" id="connection-bar">&#x26A0; Connection lost — reconnecting...</div>
+      <div class="info-bar info-bar-warn" id="muted-warning">&#x26A0; You are muted — your recording will be silent. Unmute to capture audio.</div>
+      <div id="status-bar">
         <span id="status-text" class="status-msg status-waiting">Waiting for producer to start recording...</span>
       </div>
-
-      <div class="status-bar" id="rec-bar" style="display:none;">
+      <div class="rec-bar" id="rec-bar" style="display:none;">
         <span class="rec-dot"></span>
         <span class="timer" id="timer">00:00:00</span>
-        <span class="codec-badge" id="codec-badge"></span>
-        <span class="size-badge" id="size-badge"></span>
+        <span class="badge" id="codec-badge"></span>
+        <span class="badge" id="size-badge"></span>
       </div>
-
-      <div class="controls" id="controls" style="display:none;">
+      <div id="controls" style="display:none;">
         <button class="btn btn-danger" id="stop-btn">Stop &amp; Upload</button>
       </div>
-
       <div class="progress-container" id="progress-container">
         <div class="progress-bar" id="progress-bar"></div>
       </div>
     </div>
 
-    <!-- Error Screen -->
     <div id="error-screen">
       <div class="status-msg status-error" id="error-msg"></div>
       <div class="error-instructions" id="error-instructions"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="setup-modal">
+    <div class="modal">
+      <h2>Set up your recording</h2>
+      <p class="modal-sub">Select your camera and microphone, then confirm when everything looks good.</p>
+      <video class="modal-preview" id="setup-preview" autoplay muted playsinline></video>
+      <label for="camera-select">Camera</label>
+      <select id="camera-select"></select>
+      <label for="mic-select">Microphone</label>
+      <select id="mic-select"></select>
+      <label>Audio Level</label>
+      <div class="meter-container">
+        <div class="meter-bar" id="audio-meter-bar"></div>
+      </div>
+      <div class="modal-error" id="setup-error" style="display:none;"></div>
+      <button class="btn btn-success" id="setup-confirm-btn" style="width:100%;">Looks Good — I'm Ready</button>
+    </div>
+  </div>
+
+  <div class="toolbar-wrapper" id="toolbar-wrapper">
+    <div class="toolbar-label">Recording Controls — These affect your recording, not your meeting</div>
+    <div class="toolbar">
+      <button class="tb-btn" id="tb-mute" title="Mute/Unmute">
+        <span class="icon" id="tb-mute-icon">&#x1F3A4;</span>
+        <span id="tb-mute-label">Mute</span>
+      </button>
+      <button class="tb-btn" id="tb-video" title="Video On/Off">
+        <span class="icon" id="tb-video-icon">&#x1F4F7;</span>
+        <span id="tb-video-label">Video Off</span>
+      </button>
+      <div style="position:relative;">
+        <button class="tb-btn" id="tb-cam-switch" title="Switch Camera">
+          <span class="icon">&#x1F504;</span>
+          <span>Camera</span>
+        </button>
+        <div class="dev-dropdown" id="cam-dropdown"></div>
+      </div>
+      <div style="position:relative;">
+        <button class="tb-btn" id="tb-mic-switch" title="Switch Mic">
+          <span class="icon">&#x1F504;</span>
+          <span>Mic</span>
+        </button>
+        <div class="dev-dropdown" id="mic-dropdown"></div>
+      </div>
+      <button class="tb-btn" id="tb-screen" title="Screen Share">
+        <span class="icon">&#x1F5A5;</span>
+        <span id="tb-screen-label">Screen</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="screen-thumb-container" id="screen-thumb-container">
+    <video class="screen-thumb" id="screen-thumb-video" autoplay muted playsinline></video>
+    <div class="screen-thumb-label">Screen Recording Active</div>
+  </div>
+
+  <div class="toast-container" id="toast-container">
+    <div class="toast">
+      <div class="toast-text" id="toast-text"></div>
+      <div class="toast-actions">
+        <button class="btn btn-sm btn-success" id="toast-approve">Approve</button>
+        <button class="btn btn-sm btn-ghost" id="toast-dismiss">Dismiss</button>
+      </div>
     </div>
   </div>
 
@@ -224,7 +598,6 @@
       'video/webm;codecs=vp9,opus',
       'video/webm'
     ];
-
     const selectedMime = MIME_PRIORITY.find(t => MediaRecorder.isTypeSupported(t));
     const fileExtension = selectedMime && selectedMime.includes('webm') ? 'webm' : 'mp4';
 
@@ -236,6 +609,7 @@
     let mediaRecorder = null;
     let recordedChunks = [];
     let recordingStartTime = null;
+    let recordingStartTs = null;
     let timerInterval = null;
     let ws = null;
     let wsReconnectTimer = null;
@@ -243,415 +617,541 @@
     let isRecording = false;
     let isUploading = false;
     let sessionId = null;
+    let recIndex = 1;
+    let sessionStopped = false;
+    let isMuted = false;
+    let isCameraOff = false;
+    let isScreenSharing = false;
+    let selectedCameraId = null;
+    let selectedMicId = null;
+    let screenStream = null;
+    let screenRecorder = null;
+    let screenChunks = [];
+    let screenStartTs = null;
+    let audioCtx = null;
+    let analyserNode = null;
+    let audioSource = null;
+    let meterRAF = null;
+    let requestQueue = [];
+    let currentRequest = null;
 
     const urlParams = new URLSearchParams(window.location.search);
     sessionId = urlParams.get('session');
 
     // ========================================================
-    // DOM References
+    // DOM
     // ========================================================
-    const nameScreen = document.getElementById('name-screen');
-    const nameInput = document.getElementById('name-input');
-    const joinBtn = document.getElementById('join-btn');
-    const recordingScreen = document.getElementById('recording-screen');
-    const videoPreview = document.getElementById('video-preview');
-    const statusText = document.getElementById('status-text');
-    const recBar = document.getElementById('rec-bar');
-    const timerEl = document.getElementById('timer');
-    const codecBadge = document.getElementById('codec-badge');
-    const sizeBadge = document.getElementById('size-badge');
-    const controls = document.getElementById('controls');
-    const stopBtn = document.getElementById('stop-btn');
-    const progressContainer = document.getElementById('progress-container');
-    const progressBar = document.getElementById('progress-bar');
-    const connectionBar = document.getElementById('connection-bar');
-    const errorScreen = document.getElementById('error-screen');
-    const errorMsg = document.getElementById('error-msg');
-    const errorInstructions = document.getElementById('error-instructions');
+    const $ = id => document.getElementById(id);
+    const nameScreen = $('name-screen');
+    const nameInput = $('name-input');
+    const joinBtn = $('join-btn');
+    const recordingScreen = $('recording-screen');
+    const videoPreview = $('video-preview');
+    const statusText = $('status-text');
+    const recBar = $('rec-bar');
+    const timerEl = $('timer');
+    const codecBadge = $('codec-badge');
+    const sizeBadge = $('size-badge');
+    const controls = $('controls');
+    const stopBtn = $('stop-btn');
+    const progressContainer = $('progress-container');
+    const progressBar = $('progress-bar');
+    const connectionBar = $('connection-bar');
+    const mutedWarning = $('muted-warning');
+    const errorScreen = $('error-screen');
+    const errorMsg = $('error-msg');
+    const errorInstructions = $('error-instructions');
+    const setupModal = $('setup-modal');
+    const setupPreview = $('setup-preview');
+    const cameraSelect = $('camera-select');
+    const micSelect = $('mic-select');
+    const audioMeterBar = $('audio-meter-bar');
+    const setupError = $('setup-error');
+    const setupConfirmBtn = $('setup-confirm-btn');
+    const toolbarWrapper = $('toolbar-wrapper');
+    const tbMute = $('tb-mute');
+    const tbMuteIcon = $('tb-mute-icon');
+    const tbMuteLabel = $('tb-mute-label');
+    const tbVideo = $('tb-video');
+    const tbVideoIcon = $('tb-video-icon');
+    const tbVideoLabel = $('tb-video-label');
+    const tbCamSwitch = $('tb-cam-switch');
+    const camDropdown = $('cam-dropdown');
+    const tbMicSwitch = $('tb-mic-switch');
+    const micDropdown = $('mic-dropdown');
+    const tbScreen = $('tb-screen');
+    const tbScreenLabel = $('tb-screen-label');
+    const screenThumbContainer = $('screen-thumb-container');
+    const screenThumbVideo = $('screen-thumb-video');
+    const toastContainer = $('toast-container');
+    const toastText = $('toast-text');
+    const toastApprove = $('toast-approve');
+    const toastDismiss = $('toast-dismiss');
 
     // ========================================================
     // Name Entry
     // ========================================================
-    nameInput.addEventListener('input', () => {
-      joinBtn.disabled = nameInput.value.trim().length === 0;
-    });
-
-    nameInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !joinBtn.disabled) joinBtn.click();
-    });
+    nameInput.addEventListener('input', () => { joinBtn.disabled = nameInput.value.trim().length === 0; });
+    nameInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !joinBtn.disabled) joinBtn.click(); });
 
     joinBtn.addEventListener('click', async () => {
       guestName = nameInput.value.trim();
       if (!guestName) return;
-
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 30 }
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 48000
-          }
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+          audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
         });
-
-        videoPreview.srcObject = mediaStream;
         nameScreen.style.display = 'none';
         recordingScreen.style.display = 'flex';
+        videoPreview.srcObject = mediaStream;
         codecBadge.textContent = fileExtension.toUpperCase();
-
         connectWebSocket();
-      } catch (err) {
-        showError(err);
-      }
+        openDeviceSetup();
+      } catch (err) { showError(err); }
     });
 
     // ========================================================
-    // WebSocket Connection
+    // Device Setup Modal
     // ========================================================
-    function connectWebSocket() {
-      if (!sessionId) {
-        statusText.textContent = 'Standalone mode — click Start to begin recording';
-        statusText.className = 'status-msg status-waiting';
-        showStandaloneControls();
-        return;
+    async function openDeviceSetup() {
+      setupModal.classList.add('active');
+      sendWsMessage({ type: 'guest-setup-started' });
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter(d => d.kind === 'videoinput');
+      const mics = devices.filter(d => d.kind === 'audioinput');
+
+      if (cameras.length === 0 || mics.length === 0) {
+        setupError.textContent = cameras.length === 0 && mics.length === 0
+          ? 'No camera or microphone detected. Please connect devices and refresh.'
+          : cameras.length === 0
+            ? 'No camera detected. Please connect a camera and refresh.'
+            : 'No microphone detected. Please connect a microphone and refresh.';
+        setupError.style.display = 'block';
+        setupConfirmBtn.disabled = true;
       }
 
+      cameraSelect.innerHTML = '';
+      cameras.forEach(cam => {
+        const opt = document.createElement('option');
+        opt.value = cam.deviceId;
+        opt.textContent = cam.label || `Camera ${cameraSelect.length + 1}`;
+        cameraSelect.appendChild(opt);
+      });
+      micSelect.innerHTML = '';
+      mics.forEach(mic => {
+        const opt = document.createElement('option');
+        opt.value = mic.deviceId;
+        opt.textContent = mic.label || `Microphone ${micSelect.length + 1}`;
+        micSelect.appendChild(opt);
+      });
+
+      const vt = mediaStream.getVideoTracks()[0];
+      const at = mediaStream.getAudioTracks()[0];
+      if (vt) { const s = vt.getSettings(); if (s.deviceId) cameraSelect.value = s.deviceId; }
+      if (at) { const s = at.getSettings(); if (s.deviceId) micSelect.value = s.deviceId; }
+      selectedCameraId = cameraSelect.value;
+      selectedMicId = micSelect.value;
+      setupPreview.srcObject = mediaStream;
+      startAudioMeter(mediaStream);
+
+      cameraSelect.addEventListener('change', async () => { selectedCameraId = cameraSelect.value; await switchSetupStream(); });
+      micSelect.addEventListener('change', async () => { selectedMicId = micSelect.value; await switchSetupStream(); });
+    }
+
+    async function switchSetupStream() {
+      mediaStream.getTracks().forEach(t => t.stop());
+      stopAudioMeter();
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+          audio: { deviceId: { exact: selectedMicId }, echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+        });
+        setupPreview.srcObject = mediaStream;
+        videoPreview.srcObject = mediaStream;
+        startAudioMeter(mediaStream);
+        setupError.style.display = 'none';
+        setupConfirmBtn.disabled = false;
+      } catch (err) {
+        setupError.textContent = `Could not access selected device: ${err.message}`;
+        setupError.style.display = 'block';
+      }
+    }
+
+    function startAudioMeter(stream) {
+      audioCtx = new AudioContext();
+      audioSource = audioCtx.createMediaStreamSource(stream);
+      analyserNode = audioCtx.createAnalyser();
+      analyserNode.fftSize = 256;
+      audioSource.connect(analyserNode);
+      const data = new Uint8Array(analyserNode.frequencyBinCount);
+      function draw() {
+        analyserNode.getByteFrequencyData(data);
+        audioMeterBar.style.width = (Math.max(...data) / 255 * 100) + '%';
+        meterRAF = requestAnimationFrame(draw);
+      }
+      draw();
+    }
+
+    function stopAudioMeter() {
+      if (meterRAF) cancelAnimationFrame(meterRAF);
+      if (audioSource) audioSource.disconnect();
+      if (audioCtx) audioCtx.close().catch(() => {});
+      audioCtx = analyserNode = audioSource = meterRAF = null;
+    }
+
+    setupConfirmBtn.addEventListener('click', () => {
+      stopAudioMeter();
+      setupModal.classList.remove('active');
+      toolbarWrapper.style.display = 'flex';
+      $('main-container').style.paddingBottom = '100px';
+      sendWsMessage({
+        type: 'guest-ready',
+        activeCamera: cameraSelect.options[cameraSelect.selectedIndex]?.text || 'Camera',
+        activeMic: micSelect.options[micSelect.selectedIndex]?.text || 'Mic'
+      });
+      statusText.textContent = 'Ready — waiting for producer to start recording...';
+      statusText.className = 'status-msg status-waiting';
+    });
+
+    // ========================================================
+    // WebSocket
+    // ========================================================
+    function connectWebSocket() {
+      if (!sessionId) { statusText.textContent = 'Standalone mode — click Start to begin recording'; statusText.className = 'status-msg status-waiting'; showStandaloneControls(); return; }
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${location.host}/ws?session=${sessionId}&role=guest`;
-
-      ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        connectionBar.style.display = 'none';
-        reconnectAttempts = 0;
-        clearTimeout(wsReconnectTimer);
-        ws.send(JSON.stringify({ type: 'guest-join', name: guestName }));
-      };
-
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        handleServerMessage(msg);
-      };
-
-      ws.onclose = () => {
-        if (isRecording || isUploading) {
-          connectionBar.style.display = 'flex';
-          attemptReconnect();
-        }
-      };
-
+      ws = new WebSocket(`${wsProtocol}//${location.host}/ws?session=${sessionId}&role=guest`);
+      ws.onopen = () => { connectionBar.style.display = 'none'; reconnectAttempts = 0; clearTimeout(wsReconnectTimer); ws.send(JSON.stringify({ type: 'guest-join', name: guestName })); };
+      ws.onmessage = e => handleServerMessage(JSON.parse(e.data));
+      ws.onclose = () => { if (isRecording || isUploading) { connectionBar.style.display = 'flex'; attemptReconnect(); } };
       ws.onerror = () => {};
     }
 
     function attemptReconnect() {
       reconnectAttempts++;
-      if (reconnectAttempts > 15) {
-        connectionBar.textContent = '\u26A0 Connection lost. Use the Stop button to save your recording.';
-        controls.style.display = 'flex';
-        return;
-      }
-      // Exponential backoff: 1s, 2s, 4s, 8s... max 15s
-      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 15000);
-      wsReconnectTimer = setTimeout(() => {
-        connectWebSocket();
-      }, delay);
+      if (reconnectAttempts > 15) { connectionBar.textContent = '\u26A0 Connection lost. Use the Stop button to save your recording.'; controls.style.display = 'block'; return; }
+      wsReconnectTimer = setTimeout(() => connectWebSocket(), Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 15000));
+    }
+
+    function sendWsMessage(msg) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
+
+    function broadcastControlState() {
+      sendWsMessage({ type: 'guest:control-update', muted: isMuted, cameraOff: isCameraOff, screenSharing: isScreenSharing,
+        activeCamera: cameraSelect.options[cameraSelect.selectedIndex]?.text || null,
+        activeMic: micSelect.options[micSelect.selectedIndex]?.text || null });
     }
 
     function handleServerMessage(msg) {
       switch (msg.type) {
-        case 'start-recording':
-          startRecording();
-          break;
-        case 'stop-recording':
-          stopRecording();
-          break;
+        case 'start-recording': startRecording(); break;
+        case 'stop-recording': sessionStopped = true; stopRecording(); if (isScreenSharing) stopScreenShare(); break;
+        case 'producer:request': enqueueRequest(msg); break;
+        case 'producer:cancel-request': dismissCurrentToast(); break;
       }
     }
 
-    // ========================================================
-    // Standalone controls
-    // ========================================================
     function showStandaloneControls() {
-      const startBtn = document.createElement('button');
-      startBtn.className = 'btn btn-success';
-      startBtn.textContent = 'Start Recording';
-      startBtn.id = 'start-btn';
-      startBtn.addEventListener('click', () => {
-        startRecording();
-        startBtn.style.display = 'none';
-      });
-      controls.style.display = 'flex';
-      controls.prepend(startBtn);
-      stopBtn.style.display = 'none';
+      const sb = document.createElement('button');
+      sb.className = 'btn btn-success'; sb.textContent = 'Start Recording'; sb.id = 'start-btn';
+      sb.addEventListener('click', () => { startRecording(); sb.style.display = 'none'; });
+      controls.style.display = 'block'; controls.prepend(sb); stopBtn.style.display = 'none';
+      toolbarWrapper.style.display = 'flex'; $('main-container').style.paddingBottom = '100px';
     }
 
     // ========================================================
     // Recording
     // ========================================================
     function startRecording() {
-      if (!selectedMime) {
-        statusText.textContent = 'No supported recording format found in this browser.';
-        statusText.className = 'status-msg status-error';
-        return;
-      }
-
-      recordedChunks = [];
-
-      mediaRecorder = new MediaRecorder(mediaStream, {
-        mimeType: selectedMime,
-        videoBitsPerSecond: 4_000_000
-      });
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) recordedChunks.push(e.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        handleRecordingStopped();
-      };
-
+      if (!selectedMime) { statusText.textContent = 'No supported recording format found.'; statusText.className = 'status-msg status-error'; return; }
+      recordedChunks = []; recordingStartTs = Date.now();
+      mediaRecorder = new MediaRecorder(mediaStream, { mimeType: selectedMime, videoBitsPerSecond: 4_000_000 });
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = () => handleRecordingStopped();
       mediaRecorder.start(1000);
-      isRecording = true;
-      recordingStartTime = Date.now();
-
-      statusText.textContent = 'Recording in progress';
-      statusText.className = 'status-msg status-recording';
-      recBar.style.display = 'flex';
-      controls.style.display = 'flex';
-      stopBtn.style.display = '';
-
-      const startBtn = document.getElementById('start-btn');
-      if (startBtn) startBtn.style.display = 'none';
-
+      isRecording = true; recordingStartTime = Date.now();
+      if (isMuted) { mutedWarning.style.display = 'flex'; }
+      statusText.textContent = 'Recording in progress'; statusText.className = 'status-msg status-recording';
+      recBar.style.display = 'flex'; controls.style.display = 'block'; stopBtn.style.display = '';
+      const sb = $('start-btn'); if (sb) sb.style.display = 'none';
       startTimer();
-
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'recording-started' }));
-      }
+      sendWsMessage({ type: 'recording-started' });
     }
 
     function stopRecording() {
-      if (!isRecording || !mediaRecorder) return;
-      isRecording = false;
-      mediaRecorder.stop();
-      stopTimer();
+      if (!isRecording || !mediaRecorder || mediaRecorder.state === 'inactive') return;
+      isRecording = false; mediaRecorder.stop(); stopTimer();
     }
-
-    stopBtn.addEventListener('click', stopRecording);
+    stopBtn.addEventListener('click', () => { sessionStopped = true; stopRecording(); if (isScreenSharing) stopScreenShare(); });
 
     async function handleRecordingStopped() {
       const blob = new Blob(recordedChunks, { type: selectedMime });
       const sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
-
       statusText.textContent = `Recording stopped (${sizeMB} MB). Uploading...`;
       statusText.className = 'status-msg status-uploading';
-      controls.style.display = 'none';
-      recBar.style.display = 'none';
-
-      const fileName = buildFileName();
-      await uploadToB2(blob, fileName);
+      controls.style.display = 'none'; recBar.style.display = 'none'; mutedWarning.style.display = 'none';
+      await uploadToB2(blob, buildFileName('camera', recordingStartTs, recIndex), 'camera', recordingStartTs, recIndex);
     }
 
     // ========================================================
-    // Timer + file size tracking
+    // Timer
     // ========================================================
     function startTimer() {
       timerInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
-        const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
-        const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
-        const s = String(elapsed % 60).padStart(2, '0');
-        timerEl.textContent = `${h}:${m}:${s}`;
-
-        // Show estimated file size
-        const totalBytes = recordedChunks.reduce((sum, c) => sum + c.size, 0);
-        const mb = (totalBytes / (1024 * 1024)).toFixed(0);
+        const e = Math.floor((Date.now() - recordingStartTime) / 1000);
+        timerEl.textContent = `${String(Math.floor(e/3600)).padStart(2,'0')}:${String(Math.floor((e%3600)/60)).padStart(2,'0')}:${String(e%60).padStart(2,'0')}`;
+        const tb = recordedChunks.reduce((s,c) => s + c.size, 0);
+        const mb = (tb / (1024*1024)).toFixed(0);
         sizeBadge.textContent = `~${mb} MB`;
-        if (totalBytes > 1.8 * 1024 * 1024 * 1024) {
-          sizeBadge.className = 'size-badge warn';
-          sizeBadge.textContent = `~${mb} MB (large!)`;
-        } else {
-          sizeBadge.className = 'size-badge';
-        }
+        if (tb > 1.8e9) { sizeBadge.className = 'badge warn'; sizeBadge.textContent = `~${mb} MB (large!)`; } else { sizeBadge.className = 'badge'; }
       }, 500);
     }
+    function stopTimer() { clearInterval(timerInterval); }
 
-    function stopTimer() {
-      clearInterval(timerInterval);
+    // ========================================================
+    // File Naming
+    // ========================================================
+    function buildFileName(type, startTs, idx) {
+      const d = new Date(startTs || Date.now());
+      const date = d.toISOString().split('T')[0];
+      const safeName = guestName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/_+$/, '');
+      return `${date}_${sessionId || 'standalone'}_${safeName}_${type}_${startTs}_rec${idx}.${fileExtension}`;
     }
 
     // ========================================================
-    // File naming
+    // Upload
     // ========================================================
-    function buildFileName() {
-      const now = new Date();
-      const date = now.toISOString().split('T')[0];
-      const time = now.toTimeString().split(' ')[0].replace(/:/g, '');
-      const safeName = guestName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
-      const sid = sessionId || 'standalone';
-      return `${date}_${sid}_${safeName}_${time}.${fileExtension}`;
-    }
+    const UPLOAD_TIMEOUT = 5 * 60 * 1000;
+    const MAX_RETRIES = 3;
 
-    // ========================================================
-    // B2 Upload with timeout and auto-retry
-    // ========================================================
-    const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-    const MAX_UPLOAD_RETRIES = 3;
-
-    async function uploadToB2(blob, fileName, attempt = 1) {
-      isUploading = true;
-      progressContainer.style.display = 'block';
-      progressBar.style.width = '0%';
-
+    async function uploadToB2(blob, fileName, fileType, startTs, idx, attempt = 1) {
+      isUploading = true; progressContainer.style.display = 'block'; progressBar.style.width = '0%';
       try {
         let uploadUrl;
-
         if (sessionId) {
-          const res = await fetch(`/api/sessions/${sessionId}/upload-url`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fileName, contentType: selectedMime })
-          });
+          const res = await fetch(`/api/sessions/${sessionId}/upload-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName, contentType: selectedMime }) });
           if (!res.ok) throw new Error(`Failed to get upload URL: ${res.status}`);
-          const data = await res.json();
-          uploadUrl = data.url;
+          uploadUrl = (await res.json()).url;
         } else {
-          statusText.textContent = 'Standalone mode: downloading locally.';
-          statusText.className = 'status-msg status-complete';
-          downloadLocally(blob, fileName);
-          isUploading = false;
-          return;
+          statusText.textContent = 'Standalone mode: downloading locally.'; statusText.className = 'status-msg status-complete';
+          downloadLocally(blob, fileName); isUploading = false; return;
         }
 
         await new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          xhr.open('PUT', uploadUrl, true);
-          xhr.setRequestHeader('Content-Type', selectedMime);
-          xhr.timeout = UPLOAD_TIMEOUT_MS;
-
-          xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-              const pct = Math.round((e.loaded / e.total) * 100);
-              progressBar.style.width = `${pct}%`;
-              statusText.textContent = `Uploading... ${pct}%`;
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'upload-progress', percent: pct }));
-              }
-            }
-          };
-
-          xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve();
-            } else {
-              reject(new Error(`Upload failed: HTTP ${xhr.status}`));
-            }
-          };
-
-          xhr.ontimeout = () => reject(new Error('Upload timed out (5 min limit)'));
-          xhr.onerror = () => reject(new Error('Upload network error'));
+          xhr.open('PUT', uploadUrl, true); xhr.setRequestHeader('Content-Type', selectedMime); xhr.timeout = UPLOAD_TIMEOUT;
+          xhr.upload.onprogress = e => { if (e.lengthComputable) { const p = Math.round(e.loaded/e.total*100); progressBar.style.width = p+'%'; statusText.textContent = `Uploading ${fileType}... ${p}%`; sendWsMessage({ type: 'upload-progress', percent: p }); } };
+          xhr.onload = () => { xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`)); };
+          xhr.ontimeout = () => reject(new Error('Upload timed out'));
+          xhr.onerror = () => reject(new Error('Network error'));
           xhr.send(blob);
         });
 
-        // Success
-        isUploading = false;
-        progressBar.style.width = '100%';
-        statusText.textContent = 'Upload complete \u2014 you\'re all set! You can close this tab.';
-        statusText.className = 'status-msg status-complete';
-
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'upload-complete', fileName }));
-        }
-
+        isUploading = false; progressBar.style.width = '100%';
+        statusText.textContent = 'Upload complete \u2014 you\'re all set! You can close this tab.'; statusText.className = 'status-msg status-complete';
+        sendWsMessage({ type: 'upload-complete', fileName, fileType, startTs, recIndex: idx, durationMs: Date.now() - startTs });
       } catch (err) {
         console.error(`Upload attempt ${attempt} failed:`, err);
-
-        // Auto-retry with backoff
-        if (attempt < MAX_UPLOAD_RETRIES) {
-          const waitSec = attempt * 2;
-          statusText.textContent = `Upload failed (attempt ${attempt}/${MAX_UPLOAD_RETRIES}). Retrying in ${waitSec}s...`;
-          statusText.className = 'status-msg status-error';
-          await new Promise(r => setTimeout(r, waitSec * 1000));
-          return uploadToB2(blob, fileName, attempt + 1);
+        if (attempt < MAX_RETRIES) {
+          const w = attempt * 2;
+          statusText.textContent = `Upload failed (${attempt}/${MAX_RETRIES}). Retrying in ${w}s...`; statusText.className = 'status-msg status-error';
+          await new Promise(r => setTimeout(r, w * 1000));
+          return uploadToB2(blob, fileName, fileType, startTs, idx, attempt + 1);
         }
-
-        // All retries exhausted — show manual controls
         isUploading = false;
-        statusText.textContent = `Upload failed after ${MAX_UPLOAD_RETRIES} attempts: ${err.message}`;
-        statusText.className = 'status-msg status-error';
-
-        controls.style.display = 'flex';
-        controls.innerHTML = '';
-
-        const retryBtn = document.createElement('button');
-        retryBtn.className = 'btn btn-primary';
-        retryBtn.textContent = 'Retry Upload';
-        retryBtn.addEventListener('click', () => {
-          controls.style.display = 'none';
-          uploadToB2(blob, fileName, 1);
-        });
-        controls.appendChild(retryBtn);
-
-        const dlBtn = document.createElement('button');
-        dlBtn.className = 'btn btn-success';
-        dlBtn.textContent = 'Download Locally';
-        dlBtn.addEventListener('click', () => downloadLocally(blob, fileName));
-        controls.appendChild(dlBtn);
+        statusText.textContent = `Upload failed: ${err.message}`; statusText.className = 'status-msg status-error';
+        controls.style.display = 'block'; controls.innerHTML = '';
+        const rb = document.createElement('button'); rb.className = 'btn btn-brand btn-sm'; rb.textContent = 'Retry';
+        rb.addEventListener('click', () => { controls.style.display = 'none'; uploadToB2(blob, fileName, fileType, startTs, idx, 1); });
+        const db = document.createElement('button'); db.className = 'btn btn-ghost btn-sm'; db.textContent = 'Download'; db.style.marginLeft = '0.5rem';
+        db.addEventListener('click', () => downloadLocally(blob, fileName));
+        controls.appendChild(rb); controls.appendChild(db);
       }
     }
 
-    function downloadLocally(blob, fileName) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      a.click();
-      URL.revokeObjectURL(url);
-      statusText.textContent = 'File downloaded locally. You can close this tab.';
-      statusText.className = 'status-msg status-complete';
-      progressContainer.style.display = 'none';
+    function downloadLocally(blob, fn) {
+      const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = fn; a.click(); URL.revokeObjectURL(u);
+      statusText.textContent = 'File downloaded. You can close this tab.'; statusText.className = 'status-msg status-complete'; progressContainer.style.display = 'none';
     }
+
+    // ========================================================
+    // Toolbar — Mute
+    // ========================================================
+    tbMute.addEventListener('click', () => { isMuted = !isMuted; applyMuteState(); broadcastControlState(); });
+    function applyMuteState() {
+      const t = mediaStream.getAudioTracks()[0]; if (t) t.enabled = !isMuted;
+      if (isMuted) { tbMute.classList.add('active'); tbMuteIcon.textContent = '\uD83D\uDD07'; tbMuteLabel.textContent = 'Unmute'; if (isRecording) mutedWarning.style.display = 'flex'; }
+      else { tbMute.classList.remove('active'); tbMuteIcon.textContent = '\uD83C\uDFA4'; tbMuteLabel.textContent = 'Mute'; mutedWarning.style.display = 'none'; }
+    }
+
+    // ========================================================
+    // Toolbar — Video
+    // ========================================================
+    tbVideo.addEventListener('click', () => { isCameraOff = !isCameraOff; applyVideoState(); broadcastControlState(); });
+    function applyVideoState() {
+      const t = mediaStream.getVideoTracks()[0];
+      if (isCameraOff) { if (t) t.enabled = false; tbVideo.classList.add('active'); tbVideoIcon.textContent = '\uD83D\uDEAB'; tbVideoLabel.textContent = 'Video On'; }
+      else { if (t) t.enabled = true; tbVideo.classList.remove('active'); tbVideoIcon.textContent = '\uD83D\uDCF7'; tbVideoLabel.textContent = 'Video Off'; }
+    }
+
+    // ========================================================
+    // Toolbar — Camera Switch
+    // ========================================================
+    tbCamSwitch.addEventListener('click', async () => {
+      if (camDropdown.classList.contains('show')) { camDropdown.classList.remove('show'); return; }
+      micDropdown.classList.remove('show');
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      camDropdown.innerHTML = '';
+      devs.forEach(c => {
+        const b = document.createElement('button'); b.className = 'dev-dropdown-item'; if (c.deviceId === selectedCameraId) b.classList.add('selected');
+        b.textContent = c.label || 'Camera';
+        b.addEventListener('click', () => { camDropdown.classList.remove('show'); if (c.deviceId !== selectedCameraId) { selectedCameraId = c.deviceId; switchDevice('camera'); } });
+        camDropdown.appendChild(b);
+      });
+      camDropdown.classList.add('show');
+    });
+
+    // ========================================================
+    // Toolbar — Mic Switch
+    // ========================================================
+    tbMicSwitch.addEventListener('click', async () => {
+      if (micDropdown.classList.contains('show')) { micDropdown.classList.remove('show'); return; }
+      camDropdown.classList.remove('show');
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+      micDropdown.innerHTML = '';
+      devs.forEach(m => {
+        const b = document.createElement('button'); b.className = 'dev-dropdown-item'; if (m.deviceId === selectedMicId) b.classList.add('selected');
+        b.textContent = m.label || 'Microphone';
+        b.addEventListener('click', () => { micDropdown.classList.remove('show'); if (m.deviceId !== selectedMicId) { selectedMicId = m.deviceId; switchDevice('mic'); } });
+        micDropdown.appendChild(b);
+      });
+      micDropdown.classList.add('show');
+    });
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('#tb-cam-switch') && !e.target.closest('#cam-dropdown')) camDropdown.classList.remove('show');
+      if (!e.target.closest('#tb-mic-switch') && !e.target.closest('#mic-dropdown')) micDropdown.classList.remove('show');
+    });
+
+    // ========================================================
+    // Device Switch
+    // ========================================================
+    async function switchDevice() {
+      const wasRec = isRecording;
+      if (wasRec && mediaRecorder && mediaRecorder.state !== 'inactive') {
+        const blob = new Blob(recordedChunks, { type: selectedMime });
+        mediaRecorder.stop(); isRecording = false; stopTimer();
+        uploadToB2(blob, buildFileName('camera', recordingStartTs, recIndex), 'camera', recordingStartTs, recIndex).catch(console.error);
+        recIndex++;
+      }
+      mediaStream.getTracks().forEach(t => t.stop());
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+          audio: { deviceId: { exact: selectedMicId }, echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+        });
+        videoPreview.srcObject = mediaStream; applyMuteState(); applyVideoState(); broadcastControlState();
+        if (wasRec) {
+          recordedChunks = []; recordingStartTs = Date.now();
+          mediaRecorder = new MediaRecorder(mediaStream, { mimeType: selectedMime, videoBitsPerSecond: 4_000_000 });
+          mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+          mediaRecorder.onstop = () => handleRecordingStopped();
+          mediaRecorder.start(1000); isRecording = true; recordingStartTime = Date.now(); startTimer();
+          statusText.textContent = 'Recording in progress'; statusText.className = 'status-msg status-recording'; recBar.style.display = 'flex';
+          sendWsMessage({ type: 'guest:recording-restarted', reason: 'device-switch', newStartTs: recordingStartTs, fileIndex: recIndex });
+        }
+      } catch (err) { statusText.textContent = `Device switch failed: ${err.message}`; statusText.className = 'status-msg status-error'; }
+    }
+
+    // ========================================================
+    // Screen Share
+    // ========================================================
+    tbScreen.addEventListener('click', () => { isScreenSharing ? stopScreenShare() : startScreenShare(); });
+
+    async function startScreenShare() {
+      if (sessionStopped) { statusText.textContent = 'Session ended — screen share unavailable.'; statusText.className = 'status-msg status-error'; return; }
+      try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        if (screenStream.getAudioTracks().length === 0 && navigator.platform.toUpperCase().includes('MAC')) {
+          statusText.textContent = 'System audio not detected. Screen recording will be video only.';
+          setTimeout(() => { if (isRecording) { statusText.textContent = 'Recording in progress'; statusText.className = 'status-msg status-recording'; } }, 4000);
+        }
+        screenStartTs = Date.now(); screenChunks = [];
+        screenRecorder = new MediaRecorder(screenStream, { mimeType: selectedMime, videoBitsPerSecond: 4_000_000 });
+        screenRecorder.ondataavailable = e => { if (e.data.size > 0) screenChunks.push(e.data); };
+        screenRecorder.onstop = () => handleScreenShareStopped();
+        screenRecorder.start(1000); isScreenSharing = true;
+        tbScreen.classList.add('screen-active'); tbScreenLabel.textContent = 'Stop';
+        screenThumbContainer.style.display = 'block'; screenThumbVideo.srcObject = screenStream;
+        broadcastControlState(); sendWsMessage({ type: 'guest:screen-share-started', startTs: screenStartTs });
+        screenStream.getVideoTracks()[0].onended = () => { if (isScreenSharing) stopScreenShare(); };
+      } catch (err) { if (err.name !== 'NotAllowedError') { statusText.textContent = 'Screen share blocked. Check permissions.'; statusText.className = 'status-msg status-error'; } }
+    }
+
+    function stopScreenShare() {
+      if (!isScreenSharing) return; isScreenSharing = false;
+      if (screenRecorder && screenRecorder.state !== 'inactive') screenRecorder.stop();
+      if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+      tbScreen.classList.remove('screen-active'); tbScreenLabel.textContent = 'Screen'; screenThumbContainer.style.display = 'none';
+      broadcastControlState();
+      sendWsMessage({ type: 'guest:screen-share-stopped', startTs: screenStartTs, endTs: Date.now(), durationMs: Date.now() - screenStartTs });
+    }
+
+    async function handleScreenShareStopped() {
+      const blob = new Blob(screenChunks, { type: selectedMime });
+      if (blob.size > 0) await uploadToB2(blob, buildFileName('screen', screenStartTs, 1), 'screen', screenStartTs, 1);
+    }
+
+    // ========================================================
+    // Producer Request Toasts
+    // ========================================================
+    function enqueueRequest(msg) { requestQueue.push(msg); if (!currentRequest) showNextToast(); }
+    function showNextToast() {
+      if (!requestQueue.length) { currentRequest = null; toastContainer.classList.remove('show'); return; }
+      currentRequest = requestQueue.shift();
+      const t = { mute: 'Your producer is requesting you mute your mic', cameraOff: 'Your producer is requesting you turn off your camera', deviceSwitch: 'Your producer is requesting you switch your camera' };
+      toastText.textContent = t[currentRequest.requestType] || 'Your producer has a request';
+      toastContainer.classList.add('show');
+    }
+
+    toastApprove.addEventListener('click', () => {
+      if (!currentRequest) return;
+      const rt = currentRequest.requestType;
+      if (rt === 'mute' && !isMuted) { isMuted = true; applyMuteState(); }
+      else if (rt === 'cameraOff' && !isCameraOff) { isCameraOff = true; applyVideoState(); }
+      else if (rt === 'deviceSwitch') tbCamSwitch.click();
+      sendWsMessage({ type: 'guest:request-response', requestType: rt, response: 'approved' });
+      broadcastControlState(); dismissCurrentToast();
+    });
+
+    toastDismiss.addEventListener('click', () => {
+      if (!currentRequest) return;
+      sendWsMessage({ type: 'guest:request-response', requestType: currentRequest.requestType, response: 'dismissed' });
+      dismissCurrentToast();
+    });
+
+    function dismissCurrentToast() { currentRequest = null; toastContainer.classList.remove('show'); setTimeout(showNextToast, 300); }
 
     // ========================================================
     // Error Handling
     // ========================================================
     function showError(err) {
-      nameScreen.style.display = 'none';
-      recordingScreen.style.display = 'none';
-      errorScreen.style.display = 'flex';
-
+      nameScreen.style.display = 'none'; recordingScreen.style.display = 'none'; errorScreen.style.display = 'flex';
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         errorMsg.textContent = 'Camera/microphone permission was denied.';
-        errorInstructions.innerHTML = `
-          <strong>Chrome:</strong> Click the camera icon in the address bar, then select "Allow" and reload.<br><br>
-          <strong>Safari:</strong> Go to Safari > Settings > Websites > Camera/Microphone, set this site to "Allow", and reload.<br><br>
-          <strong>Edge:</strong> Click the lock icon in the address bar, toggle Camera and Microphone to "Allow", and reload.
-        `;
+        errorInstructions.innerHTML = '<strong>Chrome:</strong> Click the camera icon in the address bar, select "Allow" and reload.<br><br><strong>Safari:</strong> Go to Safari > Settings > Websites > Camera/Microphone, set to "Allow", reload.<br><br><strong>Edge:</strong> Click the lock icon, toggle Camera/Microphone to "Allow", reload.';
       } else if (err.name === 'NotFoundError') {
         errorMsg.textContent = 'No camera or microphone found.';
-        errorInstructions.innerHTML = 'Please connect a camera and microphone, then reload this page.';
+        errorInstructions.innerHTML = 'Please connect a camera and microphone, then reload.';
       } else if (err.name === 'NotReadableError') {
-        errorMsg.textContent = 'Camera or microphone is in use by another application.';
-        errorInstructions.innerHTML = 'Close other apps that might be using your camera (Zoom, FaceTime, etc.) and reload.';
+        errorMsg.textContent = 'Camera or mic in use by another app.';
+        errorInstructions.innerHTML = 'Close other apps using your camera (Zoom, FaceTime, etc.) and reload.';
       } else {
-        errorMsg.textContent = `Could not access camera/microphone: ${err.message}`;
+        errorMsg.textContent = `Could not access camera/mic: ${err.message}`;
         errorInstructions.innerHTML = 'Try using Chrome or Edge for the best experience.';
       }
     }
 
-    // ========================================================
-    // Prevent accidental tab close during recording/upload
-    // ========================================================
-    window.addEventListener('beforeunload', (e) => {
-      if (isRecording || isUploading) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    });
+    window.addEventListener('beforeunload', e => { if (isRecording || isUploading) { e.preventDefault(); e.returnValue = ''; } });
   </script>
 </body>
 </html>

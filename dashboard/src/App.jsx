@@ -1,25 +1,23 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import Landing from './Landing.jsx';
 import Session from './Session.jsx';
 
 export default function App() {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
-  const [sessionName, setSessionName] = useState('');
-  const [creating, setCreating] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
+  const [loading, setLoading] = useState(true);
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
   const reconnectDelay = useRef(1000);
 
-  // Fetch existing sessions on mount
   useEffect(() => {
     fetch('/api/sessions')
       .then(r => r.json())
-      .then(setSessions)
-      .catch(() => {});
+      .then(data => { setSessions(data); setLoading(false); })
+      .catch(() => setLoading(false));
   }, []);
 
-  // WebSocket connection for the active session with reconnect
   useEffect(() => {
     if (!activeSessionId) {
       setWsConnected(false);
@@ -33,7 +31,7 @@ export default function App() {
 
       ws.onopen = () => {
         setWsConnected(true);
-        reconnectDelay.current = 1000; // reset backoff
+        reconnectDelay.current = 1000;
         clearTimeout(reconnectTimer.current);
       };
 
@@ -49,7 +47,6 @@ export default function App() {
       ws.onclose = () => {
         wsRef.current = null;
         setWsConnected(false);
-        // Auto-reconnect with exponential backoff
         reconnectTimer.current = setTimeout(() => {
           reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
           connect();
@@ -70,23 +67,15 @@ export default function App() {
     };
   }, [activeSessionId]);
 
-  const createSession = async () => {
-    if (!sessionName.trim()) return;
-    setCreating(true);
-    try {
-      const res = await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: sessionName.trim() })
-      });
-      const session = await res.json();
-      setSessions(prev => [session, ...prev]);
-      setActiveSessionId(session.id);
-      setSessionName('');
-    } catch (err) {
-      console.error('Failed to create session:', err);
-    }
-    setCreating(false);
+  const createSession = async (name) => {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const session = await res.json();
+    setSessions(prev => [session, ...prev]);
+    setActiveSessionId(session.id);
   };
 
   const sendCommand = useCallback((type, payload = {}) => {
@@ -97,78 +86,83 @@ export default function App() {
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
 
-  return (
-    <div className="min-h-screen p-6 max-w-4xl mx-auto">
-      {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">CamOp</h1>
-          <p className="text-sm text-gray-500">Producer Dashboard</p>
-        </div>
-        {activeSessionId && (
-          <div className="flex items-center gap-2 text-xs">
-            <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`} />
-            <span className={wsConnected ? 'text-green-400' : 'text-red-400'}>
-              {wsConnected ? 'Connected' : 'Reconnecting...'}
-            </span>
+  // Landing page when no active session
+  if (!activeSession) {
+    return (
+      <div>
+        <Landing onCreateSession={createSession} />
+
+        {/* Session history drawer */}
+        {sessions.length > 0 && (
+          <div className="fixed bottom-0 left-0 right-0 z-20">
+            <div className="max-w-2xl mx-auto px-6 pb-6">
+              <details className="glass group">
+                <summary className="px-5 py-3 cursor-pointer text-sm text-gray-400 hover:text-white transition-colors flex items-center justify-between select-none">
+                  <span className="font-medium">{sessions.length} previous session{sessions.length !== 1 ? 's' : ''}</span>
+                  <svg className="w-4 h-4 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                  </svg>
+                </summary>
+                <div className="px-2 pb-2 max-h-64 overflow-y-auto space-y-1">
+                  {sessions.map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => setActiveSessionId(s.id)}
+                      className="w-full px-4 py-3 text-left rounded-xl hover:bg-white/[0.06] transition-all duration-200 flex justify-between items-center group/item"
+                    >
+                      <div>
+                        <div className="text-sm text-white font-medium group-hover/item:text-brand-400 transition-colors">{s.name}</div>
+                        <div className="text-xs text-gray-600">{new Date(s.createdAt).toLocaleString()}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-600">{s.guests.length} guest{s.guests.length !== 1 ? 's' : ''}</span>
+                        <svg className="w-4 h-4 text-gray-600 group-hover/item:text-brand-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </details>
+            </div>
           </div>
         )}
       </div>
+    );
+  }
 
-      {/* Create Session */}
-      <div className="bg-gray-900 rounded-xl p-5 mb-6 border border-gray-800">
-        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">New Session</h2>
-        <div className="flex gap-3">
-          <input
-            type="text"
-            value={sessionName}
-            onChange={e => setSessionName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && createSession()}
-            placeholder="Session name (e.g. Goodwater CEO Testimonial)"
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 outline-none focus:border-blue-500"
-          />
-          <button
-            onClick={createSession}
-            disabled={creating || !sessionName.trim()}
-            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-lg font-medium transition-colors"
-          >
-            Create Session
-          </button>
+  // Active session view
+  return (
+    <div className="min-h-screen">
+      {/* Top bar */}
+      <div className="sticky top-0 z-30 glass border-b border-white/[0.06] backdrop-blur-2xl">
+        <div className="max-w-4xl mx-auto px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setActiveSessionId(null)}
+              className="btn-ghost text-sm flex items-center gap-1.5 -ml-3"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+              Back
+            </button>
+            <div className="h-5 w-px bg-white/10" />
+            <h1 className="text-sm font-semibold text-gradient">CamOp</h1>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <span className={`status-dot ${wsConnected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'}`} />
+            <span className={wsConnected ? 'text-emerald-400' : 'text-red-400'}>
+              {wsConnected ? 'Live' : 'Reconnecting...'}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Session List */}
-      {sessions.length > 0 && !activeSession && (
-        <div className="bg-gray-900 rounded-xl border border-gray-800 divide-y divide-gray-800">
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">Sessions</h2>
-          {sessions.map(s => (
-            <button
-              key={s.id}
-              onClick={() => setActiveSessionId(s.id)}
-              className="w-full px-5 py-3 text-left hover:bg-gray-800/50 transition-colors flex justify-between items-center"
-            >
-              <div>
-                <div className="text-white font-medium">{s.name}</div>
-                <div className="text-xs text-gray-500">{new Date(s.createdAt).toLocaleString()}</div>
-              </div>
-              <div className="text-sm text-gray-500">{s.guests.length} guest{s.guests.length !== 1 ? 's' : ''}</div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Active Session */}
-      {activeSession && (
-        <>
-          <button
-            onClick={() => setActiveSessionId(null)}
-            className="text-sm text-gray-500 hover:text-gray-300 mb-4 flex items-center gap-1"
-          >
-            &larr; Back to sessions
-          </button>
-          <Session session={activeSession} sendCommand={sendCommand} />
-        </>
-      )}
+      {/* Session content */}
+      <div className="max-w-4xl mx-auto px-6 py-8 animate-fade-in">
+        <Session session={activeSession} sendCommand={sendCommand} />
+      </div>
     </div>
   );
 }
