@@ -1,6 +1,9 @@
-"""ffmpeg render: per-frame crop driven by sendcmd, lanczos scale to 1080x1920, audio stream-copied."""
+"""ffmpeg render. Sub-pixel-accurate crop in two stages, driven per frame by sendcmd:
+  format=yuv444p -> crop@c1 (integer, crop_w+2 wide) -> scale@sc lanczos (2 src px of margin)
+  -> crop@c2 (1080x1920, offset = fractional remainder in output px) -> yuv420p
+Scale size follows the shot (scale@sc accepts w/h commands), so every shot maps crop_w x crop_h to exactly
+1080x1920 (no stretch). Audio is stream-copied."""
 from __future__ import annotations
-import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,28 +14,59 @@ import numpy as np
 from .media import probe as ffprobe
 
 
-def write_sendcmd(path: Path, shots: List[tuple], times: np.ndarray, fps: float) -> int:
-    """shots: list of (start_frame, ShotCamera). Emits a command whenever the crop changes."""
+def plan_commands(shots: List[tuple], times: np.ndarray, fps: float, probe, cfg) -> tuple:
+    """Per-frame sendcmd lines. Returns (lines, first) where first = (c1w, c1h, c1x, c1y, sw, sh, c2x, c2y).
+    Stage 1 crops an integer window padded by 2 source px (where the source has room), stage 2 scales it so
+    the padded window maps to exactly out_w/out_h * (pad ratio), stage 3 crops out_w x out_h at the
+    fractional remainder converted to output px. Net: crop positions accurate to one output pixel."""
+    ax, ay, aw, ah = probe.active
     lines = []
     last = None
+    first = None
     half = 0.5 / fps
     for a, cam in shots:
+        pad_x = 2 if cam.crop_w + 2 <= aw else 0
+        pad_y = 2 if cam.crop_h + 2 <= ah else 0
+        c1w, c1h = cam.crop_w + pad_x, cam.crop_h + pad_y
+        sw = int(round(cfg.out_w * c1w / cam.crop_w))
+        sh = int(round(cfg.out_h * c1h / cam.crop_h))
+        kx, ky = sw / c1w, sh / c1h
+        max_x, max_y = ax + aw - c1w, ay + ah - c1h
         for i in range(len(cam.x)):
             f = a + i
-            vals = (cam.crop_w, cam.crop_h, int(cam.x[i]), int(cam.y[i]))
+            X = float(np.clip(cam.x[i], ax, max_x))
+            Y = float(np.clip(cam.y[i], ay, max_y))
+            c1x = int(np.floor(X))
+            c2x = max(0, min(sw - cfg.out_w, int(round((X - c1x) * kx))))
+            if pad_y:
+                c1y = int(np.floor(Y))
+                c2y = max(0, min(sh - cfg.out_h, int(round((Y - c1y) * ky))))
+            else:
+                c1y, c2y = int(round(Y)), 0
+            vals = (c1w, c1h, c1x, c1y, sw, sh, c2x, c2y)
+            if first is None:
+                first = vals
             if i == 0 or vals != last:
                 t = float(times[f]) if f < len(times) else f / fps
                 t = max(0.0, t - half)
-                lines.append(f"{t:.5f} crop w {vals[0]}, crop h {vals[1]}, crop x {vals[2]}, crop y {vals[3]};")
+                lines.append(f"{t:.5f} crop@c1 w {c1w}, crop@c1 h {c1h}, scale@sc w {sw}, scale@sc h {sh}, "
+                             f"crop@c1 x {c1x}, crop@c1 y {c1y}, crop@c2 x {c2x}, crop@c2 y {c2y};")
                 last = vals
+    return lines, first
+
+
+def write_sendcmd(path: Path, shots: List[tuple], times: np.ndarray, fps: float, probe, cfg) -> tuple:
+    lines, first = plan_commands(shots, times, fps, probe, cfg)
     path.write_text("\n".join(lines) + "\n")
-    return len(lines)
+    return len(lines), first
 
 
 def render(src: Path, dst: Path, cmd_file: Path, first: tuple, cfg, has_audio: bool) -> None:
-    cw, ch, x0, y0 = first
-    vf = (f"[0:v]sendcmd=f={cmd_file.name},crop=w={cw}:h={ch}:x={x0}:y={y0},"
-          f"scale={cfg.out_w}:{cfg.out_h}:flags=lanczos,setsar=1,format=yuv420p[v]")
+    c1w, c1h, c1x, c1y, sw, sh, c2x, c2y = first
+    vf = (f"[0:v]sendcmd=f={cmd_file.name},format=yuv444p,"
+          f"crop@c1=w={c1w}:h={c1h}:x={c1x}:y={c1y}:exact=1,"
+          f"scale@sc=w={sw}:h={sh}:flags=lanczos,"
+          f"crop@c2=w={cfg.out_w}:h={cfg.out_h}:x={c2x}:y={c2y}:exact=1,setsar=1,format=yuv420p[v]")
     cmd = ["ffmpeg", "-y", "-hide_banner", "-nostats", "-loglevel", "error", "-i", str(src),
            "-filter_complex", vf, "-map", "[v]"]
     if has_audio:

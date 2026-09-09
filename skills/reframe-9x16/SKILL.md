@@ -64,16 +64,20 @@ PP-OCRv3 DB (text overlays). All CPU-friendly; `--device mps` speeds YOLO up on 
    > tracked object (YOLO) > dominant moving blob > colour/spectral saliency. A centre crop is only
    produced when the measured focal point sits at centre (noted as verified in the sidecar and report).
 4. **Camera** (one mode per shot, preference order): `LOCKED` (5th-95th percentile of the subject stays inside
-   the middle 60% of the window) > `PAN` (hold; after 0.25 s outside the deadband ease over >=1 s to a new
-   hold, speed capped at 0.6 window-widths/s; accepted if <=0.6 moves/s and subject inside >=93% of frames)
-   > `TRACK` (0.3 s median + 0.25 s EMA follow, speed capped). Always clamped to the source (active
-   picture if letterboxed). Full source height; punch-in only for tiny subjects (cap 1.15x HD, 2x 4K).
-5. **Render**: ffmpeg `sendcmd` drives `crop` per frame (VFR-safe, uses real packet pts), lanczos scale to
-   1080x1920, libx264 High CRF 18 yuv420p faststart, audio stream-copied, no rate/colour changes.
-   Vertical/square sources are remuxed through unchanged and flagged.
+   the middle 60% of the window) > `PAN` (hold; after 0.25 s outside the deadband, one C2 "smootherstep"
+   ease of >=1 s to a new hold, average speed <=0.35 window-widths/s; accepted if <=0.6 moves/s, moving
+   <=40% of the shot, no sustained travel >3 s, and subject inside the window while holding) > `TRACK`
+   (non-causal Gaussian smoothing, sigma 0.35 s, speed-capped, re-smoothed: no jitter, hunting or lag).
+   Always clamped to the source (active picture if letterboxed). Full source height; punch-in only for
+   tiny subjects (cap 1.15x HD, 2x 4K).
+5. **Render**: ffmpeg `sendcmd` drives a two-stage crop per frame (integer crop with a 2 px margin ->
+   lanczos scale -> output-pixel crop), so camera moves are accurate to one output pixel (measured: steady
+   px/frame in TRACK, bell-shaped velocity in PAN). VFR-safe (real packet pts), libx264 High CRF 18
+   yuv420p faststart, audio stream-copied, no rate/colour changes. Vertical/square sources are remuxed
+   through unchanged and flagged.
 6. **QC**: `qc/<clip>_contact.jpg` (6 evenly spaced frames: source with crop box over output),
    `work/<clip>.reframe.json` (per-shot mode, zoom, crop size, keyframes with `x,y` and normalised centre
-   `cx_norm,cy_norm` + easing, evidence), `qc/report.md` + `report.json`, Telegram message + photos.
+   `cx_norm,cy_norm` + easing `hold|smootherstep|linear`, evidence), `qc/report.md` + `report.json`, Telegram message + photos.
 
 ## Flags
 
@@ -83,7 +87,7 @@ PP-OCRv3 DB (text overlays). All CPU-friendly; `--device mps` speeds YOLO up on 
 ## Rebuilding in Resolve / Premiere
 
 `work/<clip>.reframe.json` -> `shots[].keyframes[]`: `frame`, `time`, crop top-left `x,y` in source px,
-crop size `crop.w x crop.h`, `cx_norm/cy_norm` (0..1 crop centre) and `ease` (`hold`, `smoothstep`,
+crop size `crop.w x crop.h`, `cx_norm/cy_norm` (0..1 crop centre) and `ease` (`hold`, `smootherstep`,
 `linear`). Position keyframes on a 9:16 timeline: pan = `(cx_norm - 0.5) * source_width`, scale =
 `1920 / crop.h`.
 

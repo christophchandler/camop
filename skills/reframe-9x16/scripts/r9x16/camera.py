@@ -25,8 +25,8 @@ class ShotCamera:
     zoom: float
     crop_w: int
     crop_h: int
-    x: np.ndarray              # per-frame crop left (int px)
-    y: np.ndarray              # per-frame crop top (int px)
+    x: np.ndarray              # per-frame crop left (float px, sub-pixel)
+    y: np.ndarray              # per-frame crop top (float px)
     keyframes: List[dict]
     moves: int
     inside_ratio: float
@@ -38,9 +38,21 @@ def _even(v: float) -> int:
     return int(round(v / 2.0)) * 2
 
 
-def _smoothstep(u):
+def _smootherstep(u):
+    """Ken Perlin's C2 ease: zero velocity AND zero acceleration at both ends (no visible kick)."""
     u = np.clip(u, 0.0, 1.0)
-    return u * u * (3 - 2 * u)
+    return u * u * u * (u * (u * 6 - 15) + 10)
+
+
+def _gauss_smooth(v: np.ndarray, sigma_frames: float) -> np.ndarray:
+    """Non-causal Gaussian smoothing (we have the whole shot, so no lag)."""
+    if sigma_frames < 0.5 or len(v) < 3:
+        return v.copy()
+    r = int(np.ceil(3 * sigma_frames))
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma_frames) ** 2)
+    k /= k.sum()
+    pad = np.pad(v, r, mode="edge")
+    return np.convolve(pad, k, mode="valid")
 
 
 def plan_axis(tgt: np.ndarray, sampled_mask: np.ndarray, fps: float, dead: float, win: float,
@@ -73,7 +85,7 @@ def plan_axis(tgt: np.ndarray, sampled_mask: np.ndarray, fps: float, dead: float
     for i in range(n):
         if moving:
             u = (i - m0) / max(1, (m1 - m0))
-            cur = c0 + (c1 - c0) * float(_smoothstep(u))
+            cur = c0 + (c1 - c0) * float(_smootherstep(u))
             if i >= m1:
                 moving = False
                 cur = c1
@@ -113,23 +125,19 @@ def plan_axis(tgt: np.ndarray, sampled_mask: np.ndarray, fps: float, dead: float
     if inside >= 0.9 and moving_frac <= 0.4 and moves_per_s <= 0.6 and not sustained:
         kf = [dict(frame=0, value=float(c[0]), ease="hold")]
         for (a, b, v0, v1) in moves:
-            kf.append(dict(frame=int(a), value=float(v0), ease="smoothstep"))
+            kf.append(dict(frame=int(a), value=float(v0), ease="smootherstep"))
             kf.append(dict(frame=int(min(b, n - 1)), value=float(v1), ease="hold"))
         return AxisPlan("PAN", c, kf, len(moves), inside)
     # ---- TRACK: continuous smoothed follow for fast / wide movement -------------------------------
+    # non-causal Gaussian (sigma ~0.35 s) kills detector jitter and hunting without lag; then a speed
+    # cap; then a light second pass so the cap never leaves a velocity kink; then clamp.
     dt = 1.0 / fps
-    k = max(1, int(round(0.3 * fps)) | 1)
-    pad = k // 2
-    padded = np.pad(tgt, pad, mode="edge")
-    med = np.array([np.median(padded[i:i + k]) for i in range(n)])
-    alpha = dt / (cfg.track_tau_s + dt)
+    c = _gauss_smooth(tgt, cfg.track_sigma_s * fps)
     vmax = cfg.max_track_speed * win * dt
-    c = np.zeros(n)
-    c[0] = med[0]
     for i in range(1, n):
-        step = alpha * (med[i] - c[i - 1])
-        step = float(np.clip(step, -vmax, vmax))
+        step = float(np.clip(c[i] - c[i - 1], -vmax, vmax))
         c[i] = c[i - 1] + step
+    c = _gauss_smooth(c, 0.4 * cfg.track_sigma_s * fps)
     c = np.clip(c, lo, hi)
     inside = float(np.mean(np.abs(tgt - c)[sampled_mask] <= 0.45 * win)) if sampled_mask.any() else 1.0
     stride = max(1, int(np.diff(np.where(sampled_mask)[0]).min()) if sampled_mask.sum() > 1 else 1)
@@ -183,8 +191,8 @@ def plan_shot(sa: ShotAnalysis, cfg, probe, times) -> ShotCamera:
     else:
         py = AxisPlan("LOCKED", np.full(n, (lo_y + hi_y) / 2), [dict(frame=0, value=float((lo_y + hi_y) / 2), ease="hold")])
     mode = px.mode if MODE_RANK[px.mode] >= MODE_RANK[py.mode] else py.mode
-    x = np.clip(np.round((px.pos - crop_w / 2) / 2) * 2, ax, ax + aw - crop_w).astype(int)
-    y = np.clip(np.round((py.pos - crop_h / 2) / 2) * 2, ay, ay + ah - crop_h).astype(int)
+    x = np.clip(px.pos - crop_w / 2, ax, ax + aw - crop_w).astype(float)
+    y = np.clip(py.pos - crop_h / 2, ay, ay + ah - crop_h).astype(float)
 
     # ---- keyframes (union of both axes) -------------------------------------------------------
     kf_frames = sorted({k["frame"] for k in px.keyframes} | {k["frame"] for k in py.keyframes})
@@ -194,7 +202,7 @@ def plan_shot(sa: ShotAnalysis, cfg, probe, times) -> ShotCamera:
     for f in kf_frames:
         ease = ease_x.get(f) or ease_y.get(f) or "linear"
         t = float(times[a + f]) if a + f < len(times) else (a + f) / fps
-        keyframes.append(dict(frame=int(a + f), time=round(t, 5), x=int(x[f]), y=int(y[f]),
+        keyframes.append(dict(frame=int(a + f), time=round(t, 5), x=round(float(x[f]), 2), y=round(float(y[f]), 2),
                               cx_norm=round((x[f] + crop_w / 2) / probe.width, 5),
                               cy_norm=round((y[f] + crop_h / 2) / probe.height, 5), ease=ease))
 

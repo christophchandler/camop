@@ -108,14 +108,13 @@ def process_clip(src: Path, job: Path, cfg: Config, det: Detectors, log) -> dict
     sidecar = job / "work" / f"{stem}.reframe.json"
     sidecar.write_text(json.dumps(plan, indent=2, default=float))
     cmd_file = job / "work" / f"{slug(stem)}.sendcmd"
-    ncmd = write_sendcmd(cmd_file, cams, times, pr.fps)
-    first = cams[0][1]
+    ncmd, first = write_sendcmd(cmd_file, cams, times, pr.fps, pr, cfg)
     log(f"  rendering ({ncmd} crop commands) -> {dst.name}")
-    render(src, dst, cmd_file, (first.crop_w, first.crop_h, int(first.x[0]), int(first.y[0])), cfg, pr.has_audio)
+    render(src, dst, cmd_file, first, cfg, pr.has_audio)
     entry["verify"] = verify(dst)
     # dense per-frame crop for the QC overlay
     for (a, cam), s in zip(cams, plan["shots"]):
-        s["_dense"] = list(zip(cam.x.tolist(), cam.y.tolist()))
+        s["_dense"] = list(zip(np.round(cam.x).astype(int).tolist(), np.round(cam.y).astype(int).tolist()))
     sheet = contact_sheet(src, job / "qc" / f"{stem}_contact.jpg", plan, dst, cfg.contact_frames)
     for s in plan["shots"]:
         s.pop("_dense", None)

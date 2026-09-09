@@ -14,10 +14,10 @@ class Config:
     face_conf: float = 0.60
     deadband: float = 0.30        # subject may drift +-30% of crop width (= middle 60%) before we move
     ease_s: float = 1.0           # duration of an eased PAN move
-    max_pan_speed: float = 0.60   # crop widths per second (PAN)
+    max_pan_speed: float = 0.35   # average crop widths per second for a PAN move (peak is ~1.9x)
     max_track_speed: float = 1.60 # crop widths per second (TRACK)
     hysteresis_s: float = 0.25    # subject must be outside deadband this long before a PAN starts
-    track_tau_s: float = 0.25     # TRACK smoothing time constant
+    track_sigma_s: float = 0.35   # TRACK Gaussian smoothing sigma (non-causal)
     min_shot_s: float = 0.4
     zoom_cap_hd: float = 1.15
     zoom_cap_4k: float = 2.0
