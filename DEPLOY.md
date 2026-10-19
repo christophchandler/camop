@@ -11,6 +11,20 @@
   `261019_Client_Project/2_FOOTAGE/1_VIDEO/CAMOP/20261019_141502_Guest_CAM_take01.mp4`, with a
   `camop_session_<id>.json` manifest beside them. A server restart restores sessions from those manifests.
 
+## Constant frame rate
+- In Chrome, Edge, Arc and other Chromium browsers on Mac and Windows, the camera file is recorded at an
+  exact 29.97 fps (or 23.976, picked per session) by guest/cfr.js: WebCodecs H.264 + AAC on the guest's own
+  GPU, every frame on a fixed grid, audio as the master clock, AAC start delay measured and compensated.
+- It falls back to MediaRecorder (variable frame rate, flagged "VFR" on the dashboard) when the browser has
+  no H.264/AAC encoder (Safari, Firefox, Chrome on Linux), when the computer can't encode the chosen size in
+  real time (checked before each first take; e.g. 4K on older Intel Macs), or if the encoder falls more than
+  three seconds behind mid-take. Variable-frame-rate files need a conform before editing.
+- The camera is asked to lock at 30 fps (24 for 23.976 sessions). A camera that only delivers 24 or less is
+  recorded on the 23.976 grid.
+- `?cfr=0` on a guest link turns it off.
+- Tests: `node tests/cfr_scheduler_test.js` (frame placement, 1 h drift, stalls), `python3 tests/cfr_browser_test.py`
+  (real recorder in headless Chromium with VP9 + Opus: grid, length, sync, decode), `CFR=vp9 python3 tests/e2e_test.py`.
+
 ## Storage (keep CamOp away from the backup)
 - CamOp has its own bucket, `christopherandcompany-camop`, and a key that can only reach it
   (`camop-railway`, Read and Write). Never point CamOp at the studio backup bucket.
