@@ -25,6 +25,19 @@
 - Tests: `node tests/cfr_scheduler_test.js` (frame placement, 1 h drift, stalls), `python3 tests/cfr_browser_test.py`
   (real recorder in headless Chromium with VP9 + Opus: grid, length, sync, decode), `CFR=vp9 python3 tests/e2e_test.py`.
 
+## Google Drive delivery
+- Every finished file is copied from the bucket to the "CamOp Uploads" shared drive:
+  `<YYMMDD_Client_Project>/2_FOOTAGE/1_VIDEO/CAMOP/<file>`, plus the session file. Drive's MD5 is checked
+  against the bytes sent; a mismatch is deleted and sent again. Failures retry with backoff (up to 10 min
+  apart) and anything undelivered is picked up again after a restart. The dashboard shows "In Drive" links
+  per file and "Open in Google Drive" per session; the landing page shows whether Drive is reachable.
+- Setup: a Google Cloud service account (Drive API enabled), added to the shared drive as Content manager;
+  its JSON key goes in the Railway variable `GOOGLE_SERVICE_ACCOUNT_JSON`. If it belongs to more than one
+  shared drive, also set `DRIVE_SHARED_DRIVE_NAME`.
+- The bucket copy stays as a backup. Don't add a bucket lifecycle rule that deletes files: it can't tell
+  whether a file has reached Drive yet.
+- Tests: `node tests/drive_stress_test.js` and `DRIVE=1 python3 tests/e2e_test.py` (fake Drive with faults).
+
 ## Storage (keep CamOp away from the backup)
 - CamOp has its own bucket, `christopherandcompany-camop`, and a key that can only reach it
   (`camop-railway`, Read and Write). Never point CamOp at the studio backup bucket.
