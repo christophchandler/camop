@@ -167,6 +167,42 @@ app.post('/api/uploads/create', async (req, res) => {
   }
 });
 
+// Upload speed test: the guest sends throwaway bytes over the same path its
+// recording will take; the server counts and discards them.
+const SPEEDTEST_MAX = 16 * 1024 * 1024;
+app.put('/api/speedtest', (req, res) => {
+  const q = guestAuth(req, res); if (!q) return;
+  let bytes = 0;
+  req.on('data', c => { bytes += c.length; if (bytes > SPEEDTEST_MAX) req.destroy(); });
+  req.on('end', () => res.json({ ok: true, bytes }));
+  req.on('error', () => { if (!res.headersSent) res.status(400).end(); });
+});
+
+const QUALITIES = new Set(['low', 'standard', 'high', '4k']);
+
+// Producer thumbnails: the guest uploads a small JPEG every few seconds; the latest is kept in memory.
+const THUMB_MAX = 300 * 1024;
+app.put('/api/thumb', (req, res) => {
+  const q = guestAuth(req, res); if (!q) return;
+  const session = S.getSession(q.sessionId);
+  const guest = session && session.guests.get(String(q.guestId || ''));
+  const chunks = []; let size = 0;
+  req.on('data', c => { size += c.length; if (size > THUMB_MAX) req.destroy(); else chunks.push(c); });
+  req.on('end', () => {
+    if (guest) { guest.thumb = Buffer.concat(chunks); guest.thumbAt = Date.now(); broadcastSessionUpdate(q.sessionId); }
+    res.json({ ok: true });
+  });
+  req.on('error', () => { if (!res.headersSent) res.status(400).end(); });
+});
+app.get('/api/sessions/:id/thumb/:guestId', requireProducer, (req, res) => {
+  const session = S.getSession(req.params.id);
+  const guest = session && session.guests.get(req.params.guestId);
+  if (!guest || !guest.thumb) return res.status(404).end();
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(guest.thumb);
+});
+
 const MAX_PART_BYTES = 64 * 1024 * 1024;
 app.put('/api/uploads/part', async (req, res) => {
   const q = guestAuth(req, res); if (!q) return;
@@ -300,9 +336,9 @@ const wsMap = new Map(); // ws -> { sessionId, guestId, role }
 const GUEST_MSGS = new Set([
   'guest-join', 'guest-setup-started', 'guest-ready', 'recording-started', 'recording-stopped',
   'guest-status', 'guest:control-update', 'guest:request-response', 'guest:recording-restarted',
-  'guest:screen-share-started', 'guest:screen-share-stopped'
+  'guest:screen-share-started', 'guest:screen-share-stopped', 'guest-speed'
 ]);
-const PRODUCER_MSGS = new Set(['start-recording', 'stop-recording', 'producer:request', 'producer:cancel-request']);
+const PRODUCER_MSGS = new Set(['start-recording', 'stop-recording', 'producer:request', 'producer:cancel-request', 'producer:set-quality']);
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -416,6 +452,8 @@ function handleMessage(ws, info, msg) {
         height: num(msg.height),
         fps: num(msg.fps),
         micLevel: num(msg.micLevel),
+        brightness: typeof msg.brightness === 'number' ? msg.brightness : -1,
+        cameraOff: Boolean(msg.cameraOff),
         lastError: sanitizeString(msg.lastError || '', 200),
         storageFreeMB: num(msg.storageFreeMB),
         at: Date.now()
@@ -429,6 +467,29 @@ function handleMessage(ws, info, msg) {
         else if (stats.unfinished > 0) S.updateGuestStatus(sessionId, guestId, 'uploading', { uploadProgress: pct });
         else if (guest.status === 'uploading' || guest.status === 'recording') S.updateGuestStatus(sessionId, guestId, 'done', { uploadProgress: 100 });
       }
+      broadcastSessionUpdate(sessionId);
+      break;
+    }
+    case 'guest-speed': {
+      const guest = session.guests.get(guestId);
+      if (!guest) return;
+      const num = v => (typeof v === 'number' && isFinite(v) ? v : 0);
+      guest.speed = {
+        uploadMbps: Math.round(num(msg.uploadMbps) * 10) / 10,
+        camMaxW: num(msg.camMaxW), camMaxH: num(msg.camMaxH),
+        recommended: QUALITIES.has(msg.recommended) ? msg.recommended : 'standard',
+        failed: Boolean(msg.failed),
+        at: Date.now()
+      };
+      S.addLog(session, `${guest.name}: upload ${guest.speed.failed ? 'test failed' : guest.speed.uploadMbps + ' Mbps'}, recommended ${guest.speed.recommended}`);
+      broadcastSessionUpdate(sessionId);
+      break;
+    }
+    case 'producer:set-quality': {
+      if (role !== 'producer') return;
+      const guest = session.guests.get(msg.guestId);
+      if (!guest || !QUALITIES.has(msg.quality)) return;
+      guest.quality = msg.quality;
       broadcastSessionUpdate(sessionId);
       break;
     }
@@ -463,7 +524,10 @@ function handleMessage(ws, info, msg) {
           }
           continue;
         }
-        sendToGuest(session, gId, { type: msg.type });
+        const quality = QUALITIES.has(msg.quality) && msg.guestId !== 'all' ? msg.quality
+          : (guest.quality || (guest.speed && guest.speed.recommended) || 'standard');
+        if (msg.type === 'start-recording' && msg.guestId !== 'all' && QUALITIES.has(msg.quality)) guest.quality = msg.quality;
+        sendToGuest(session, gId, msg.type === 'start-recording' ? { type: msg.type, quality } : { type: msg.type });
       }
       break;
     }

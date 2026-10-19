@@ -22,7 +22,15 @@
   // 8 MB parts; tests can lower it (storage requires at least 5 MB for every part but the last).
   const PART_SIZE = Math.max(5, Number(params.get('partmb')) || 8) * 1024 * 1024;
   const CHUNK_MS = 2000;
-  const VIDEO_BPS = 4_000_000;
+  const VIDEO_BPS = 6_000_000; // screen share and fallback
+  // Quality tiers. 'needMbps' is the upload speed that keeps up live, with ~30% headroom.
+  const QUALITY = {
+    low:      { label: 'Low bandwidth', w: 1920, h: 1080, bps: 3_000_000,  needMbps: 0 },
+    standard: { label: '1080p Standard', w: 1920, h: 1080, bps: 6_000_000,  needMbps: 8 },
+    high:     { label: '1080p High',     w: 1920, h: 1080, bps: 10_000_000, needMbps: 13 },
+    '4k':     { label: '4K',             w: 3840, h: 2160, bps: 20_000_000, needMbps: 26 }
+  };
+  let speedResult = null;
 
   // High then Main profile H.264 first: Baseline 3.0 is only specified up to 720x576.
   const VIDEO_MIMES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1.4d0028,mp4a.40.2', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
@@ -64,8 +72,8 @@
   const cameraSelect = $('camera-select'), micSelect = $('mic-select');
   const audioMeterBar = $('audio-meter-bar'), setupError = $('setup-error'), setupConfirmBtn = $('setup-confirm-btn');
   const toolbarWrapper = $('toolbar-wrapper');
-  const tbMute = $('tb-mute'), tbMuteIcon = $('tb-mute-icon'), tbMuteLabel = $('tb-mute-label');
-  const tbVideo = $('tb-video'), tbVideoIcon = $('tb-video-icon'), tbVideoLabel = $('tb-video-label');
+  const tbMute = $('tb-mute'), micPair = $('mic-pair'), tbMuteLabel = $('tb-mute-label');
+  const tbVideo = $('tb-video'), camPair = $('cam-pair'), tbVideoLabel = $('tb-video-label');
   const tbCamSwitch = $('tb-cam-switch'), camDropdown = $('cam-dropdown');
   const tbMicSwitch = $('tb-mic-switch'), micDropdown = $('mic-dropdown');
   const tbScreen = $('tb-screen'), tbScreenLabel = $('tb-screen-label');
@@ -440,6 +448,7 @@
       notice((noticeBar.textContent ? noticeBar.textContent + ' ' : '') + `Only about ${Math.max(0, Math.round(freeMB / 1024 * 10) / 10)} GB is available for recording here. If this is a private window, please reopen the link in a normal window.`);
     }
     setInterval(sendStatus, 2000);
+    setInterval(sendThumb, 5000);
   }
 
   function showFatal(msg, instructions) {
@@ -478,12 +487,73 @@
   // ========================================================
   // Device setup modal
   // ========================================================
+  // ========================================================
+  // Upload speed test (same path the recording uploads take)
+  // ========================================================
+  async function measureUpload() {
+    const block = new Uint8Array(1024 * 1024);
+    for (let i = 0; i < block.length; i += 65536) crypto.getRandomValues(block.subarray(i, i + 65536));
+    const body = new Blob([block, block]); // 2 MB per request
+    const q = new URLSearchParams({ sessionId, t: token });
+    const deadline = performance.now() + 6000;
+    let bytes = 0;
+    const t0 = performance.now();
+    const lane = async () => {
+      while (performance.now() < deadline && bytes < 24 * 1024 * 1024) {
+        const r = await fetch(`/api/speedtest?${q}`, { method: 'PUT', body, headers: { 'Content-Type': 'application/octet-stream' }, cache: 'no-store' });
+        if (!r.ok) throw new Error(`Speed test HTTP ${r.status}`);
+        bytes += body.size;
+      }
+    };
+    await Promise.all([lane(), lane()]);
+    const secs = (performance.now() - t0) / 1000;
+    return (bytes * 8) / secs / 1e6;
+  }
+
+  function cameraMax() {
+    const vt = mediaStream && mediaStream.getVideoTracks()[0];
+    try {
+      const c = vt && vt.getCapabilities ? vt.getCapabilities() : null;
+      if (c && c.width && c.width.max) return { w: c.width.max, h: (c.height && c.height.max) || 0 };
+    } catch {}
+    const s = vt ? vt.getSettings() : {};
+    return { w: s.width || 0, h: s.height || 0 };
+  }
+
+  function recommendQuality(mbps, cam) {
+    if (cam.w >= 3840 && mbps >= QUALITY['4k'].needMbps) return '4k';
+    if (mbps >= QUALITY.high.needMbps) return 'high';
+    if (mbps >= QUALITY.standard.needMbps) return 'standard';
+    return 'low';
+  }
+
+  async function runSpeedTest() {
+    const line = $('speed-line');
+    if (line) { line.textContent = 'Checking your internet upload speed...'; line.className = 'speed-line'; }
+    const cam = cameraMax();
+    try {
+      const mbps = await measureUpload();
+      const rec = recommendQuality(mbps, cam);
+      speedResult = { uploadMbps: mbps, camMaxW: cam.w, camMaxH: cam.h, recommended: rec, failed: false };
+      if (line) {
+        line.textContent = `Upload speed: ${mbps.toFixed(1)} Mbps. ${mbps >= QUALITY.standard.needMbps ? 'Good for high-quality recording.' : 'A little slow; your recording will finish uploading after the call.'}`;
+        line.className = 'speed-line ' + (mbps >= QUALITY.standard.needMbps ? 'ok' : 'warn');
+      }
+    } catch (err) {
+      noteError(`Speed test: ${err.message}`);
+      speedResult = { uploadMbps: 0, camMaxW: cam.w, camMaxH: cam.h, recommended: 'standard', failed: true };
+      if (line) { line.textContent = 'Could not test your upload speed. Recording will still work.'; line.className = 'speed-line warn'; }
+    }
+    sendWs({ type: 'guest-speed', ...speedResult });
+  }
+
   async function openDeviceSetup() {
     setupModal.classList.add('active');
     sendWs({ type: 'guest-setup-started' });
     await fillDeviceSelects();
     setupPreview.srcObject = mediaStream;
     startMeter(mediaStream, true);
+    runSpeedTest();
   }
 
   async function fillDeviceSelects() {
@@ -502,18 +572,44 @@
     if (vt && vt.getSettings().deviceId) cameraSelect.value = vt.getSettings().deviceId;
     if (at && at.getSettings().deviceId) micSelect.value = at.getSettings().deviceId;
     selectedCameraId = cameraSelect.value; selectedMicId = micSelect.value;
+    // Pick the best camera and a non-Bluetooth mic automatically, once, unless the guest already chose.
+    if (!autoPicked) {
+      autoPicked = true;
+      const bestCam = rankCameras(cams)[0];
+      const curMic = mics.find(m => m.deviceId === selectedMicId);
+      const betterMic = curMic && isBluetooth(curMic.label) ? mics.find(m => m.deviceId !== 'default' && !isBluetooth(m.label)) : null;
+      let changed = false;
+      if (bestCam && bestCam.deviceId !== selectedCameraId) { selectedCameraId = bestCam.deviceId; cameraSelect.value = bestCam.deviceId; changed = true; }
+      if (betterMic) { selectedMicId = betterMic.deviceId; micSelect.value = betterMic.deviceId; changed = true; }
+      if (changed) await reopenStream();
+    }
     bluetoothCheck();
+  }
+
+  let autoPicked = false;
+  const isBluetooth = label => /airpods|bluetooth|beats|buds|jabra|bose|sony wh|headset|hands-free/i.test(label || '');
+  // iPhone Continuity Camera first, then external webcams, then the built-in camera; virtual cameras last.
+  function rankCameras(cams) {
+    const score = c => {
+      const l = c.label || '';
+      if (/desk view/i.test(l)) return -1;
+      if (/obs|virtual|snap camera|mmhmm|screen|ndi|manycam/i.test(l)) return 0;
+      if (/iphone|continuity/i.test(l)) return 3;
+      if (/facetime|built-in|integrated|internal|front|back|user facing/i.test(l)) return 1;
+      return 2; // external USB webcam (Brio, Insta360, OBSBOT, capture cards...)
+    };
+    return [...cams].sort((x, y) => score(y) - score(x));
   }
 
   function bluetoothCheck() {
     const label = (micSelect.options[micSelect.selectedIndex] || {}).text || '';
-    if (/airpods|bluetooth|beats|buds|jabra|bose|sony wh|headset/i.test(label)) {
+    if (isBluetooth(label)) {
       setupError.textContent = 'This looks like a Bluetooth mic, which records at phone quality. Pick your laptop or USB mic if you can.';
       setupError.style.display = 'block';
     }
   }
 
-  cameraSelect.addEventListener('change', async () => { selectedCameraId = cameraSelect.value; await reopenStream(); });
+  cameraSelect.addEventListener('change', async () => { autoPicked = true; selectedCameraId = cameraSelect.value; await reopenStream(); });
   micSelect.addEventListener('change', async () => { selectedMicId = micSelect.value; await reopenStream(); bluetoothCheck(); });
 
   async function reopenStream() {
@@ -590,7 +686,7 @@
     selectedCameraId = kind === 'video' ? null : selectedCameraId;
     selectedMicId = kind === 'audio' ? null : selectedMicId;
     for (let i = 0; i < 5; i++) {
-      if (await reopenStream()) { notice(''); if (wasRecording) startRecording(); return; }
+      if (await reopenStream()) { notice(''); if (wasRecording) startRecording(currentQuality); return; }
       await sleep(2000);
     }
     notice(`Your ${kind === 'video' ? 'camera' : 'microphone'} is unavailable. Please reconnect it.`);
@@ -610,6 +706,7 @@
       else if (!setupModal.classList.contains('active')) {
         ws.send(JSON.stringify({ type: 'guest-ready', activeCamera: (cameraSelect.options[cameraSelect.selectedIndex] || {}).text, activeMic: (micSelect.options[micSelect.selectedIndex] || {}).text }));
       }
+      if (speedResult) ws.send(JSON.stringify({ type: 'guest-speed', ...speedResult }));
       sendStatus();
     };
     ws.onmessage = e => { try { handleServerMessage(JSON.parse(e.data)); } catch {} };
@@ -624,6 +721,39 @@
   }
   function sendWs(msg) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
 
+  // A small still for the producer's tile, and a brightness reading to catch a black camera.
+  let thumbCanvas = null, brightness = -1, thumbBusy = false;
+  async function sendThumb() {
+    if (thumbBusy || !mediaStream) return;
+    const vt = mediaStream.getVideoTracks()[0];
+    if (!vt || vt.readyState !== 'live') return;
+    thumbBusy = true;
+    try {
+      let src = null;
+      // grabFrame keeps working while this tab is behind the meeting window
+      if (window.ImageCapture) { try { src = await new ImageCapture(vt).grabFrame(); } catch {} }
+      if (!src && videoPreview.videoWidth) src = videoPreview;
+      if (!src) return;
+      const sw = src.width || src.videoWidth, sh = src.height || src.videoHeight;
+      if (!sw || !sh) return;
+      const W = 320, H = Math.round(W * sh / sw);
+      thumbCanvas = thumbCanvas || document.createElement('canvas');
+      thumbCanvas.width = W; thumbCanvas.height = H;
+      const ctx = thumbCanvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(src, 0, 0, W, H);
+      if (src.close) src.close();
+      const px = ctx.getImageData(0, 0, W, H).data;
+      let sum = 0, n = 0;
+      for (let i = 0; i < px.length; i += 4 * 16) { sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]; n++; }
+      brightness = n ? sum / n / 255 : -1;
+      const blob = await new Promise(r => thumbCanvas.toBlob(r, 'image/jpeg', 0.7));
+      if (!blob) return;
+      const q = new URLSearchParams({ sessionId, t: token, guestId: CLIENT_ID });
+      await fetch(`/api/thumb?${q}`, { method: 'PUT', body: blob, headers: { 'Content-Type': 'image/jpeg' }, cache: 'no-store' });
+    } catch (e) { /* thumbnails are best-effort */ }
+    finally { thumbBusy = false; }
+  }
+
   async function sendStatus() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const tot = await uploadTotals().catch(() => ({ recorded: 0, uploaded: 0, pending: 0, unfinished: 0 }));
@@ -637,6 +767,8 @@
       recordedBytes: tot.recorded, uploadedBytes: tot.uploaded, pendingBytes: tot.pending, unfinished: tot.unfinished,
       width: s.width || 0, height: s.height || 0, fps: s.frameRate || 0,
       micLevel: Math.round(micLevel * 100) / 100,
+      brightness: Math.round(brightness * 100) / 100,
+      cameraOff: isCameraOff,
       storageFreeMB: free === null ? 0 : Math.round(free),
       lastError
     });
@@ -647,7 +779,7 @@
 
   function handleServerMessage(msg) {
     switch (msg.type) {
-      case 'start-recording': startRecording(); break;
+      case 'start-recording': startRecording(msg.quality); break;
       case 'stop-recording': stopRecording(true); break;
       case 'producer:request': enqueueRequest(msg); break;
       case 'producer:cancel-request': dismissCurrentToast(); break;
@@ -657,15 +789,31 @@
   // ========================================================
   // Recording
   // ========================================================
-  async function startRecording() {
-    if (isRecording) return;
+  let starting = false, currentQuality = 'standard';
+  async function startRecording(quality) {
+    if (isRecording || starting) return;
     if (!videoMime) { setStatus('This browser cannot record video. Please use Chrome, Edge or Safari.', 'status-error'); return; }
-    if (!mediaStream || !mediaStream.active) { if (!(await reopenStream())) return; }
+    starting = true;
+    try {
+      if (!mediaStream || !mediaStream.active) { if (!(await reopenStream())) return; }
+      if (quality && QUALITY[quality]) currentQuality = quality;
+      const q = QUALITY[currentQuality] || QUALITY.standard;
+      // Ask the camera for this tier's resolution; it delivers the closest it can.
+      const vt = mediaStream.getVideoTracks()[0];
+      if (vt && vt.applyConstraints) {
+        try { await vt.applyConstraints({ width: { ideal: q.w }, height: { ideal: q.h }, frameRate: { ideal: 30 } }); }
+        catch (e) { noteError(`Camera could not switch to ${q.label}: ${e.message}`); }
+      }
+      await startTakes(q);
+    } finally { starting = false; }
+  }
+
+  async function startTakes(q) {
     isRecording = true; sessionStarted = true;
     recordingStartTime = Date.now();
     const idx = recIndex++;
     try {
-      const cam = new TrackRecorder(mediaStream, { fileType: 'camera', mime: videoMime, videoBps: VIDEO_BPS, audioBps: 192000, recIndex: idx });
+      const cam = new TrackRecorder(mediaStream, { fileType: 'camera', mime: videoMime, videoBps: q.bps, audioBps: 192000, recIndex: idx });
       tracks = [await cam.start()];
       const at = mediaStream.getAudioTracks()[0];
       if (at && audioMime) {
@@ -681,12 +829,12 @@
     }
     if (isMuted) mutedWarning.style.display = 'flex';
     setStatus('Recording. Your video is being saved to this computer and uploaded as you go.', 'status-recording');
-    recBar.style.display = 'flex'; controls.style.display = 'block';
+    toolbarWrapper.classList.add('is-recording');
     recoveryBar.style.display = 'none'; progressContainer.style.display = 'none';
-    setDeviceSwitching(false);
     startTimer();
     holdWakeLock();
-    sendWs({ type: 'recording-started' });
+    sizeBadge.title = q.label;
+    sendWs({ type: 'recording-started', quality: currentQuality });
     sendStatus();
   }
 
@@ -700,8 +848,7 @@
     for (const t of tracks) lockedRecs.delete(t.rec.id);
     tracks = [];
     releaseWakeLock();
-    setDeviceSwitching(true);
-    controls.style.display = 'none'; recBar.style.display = 'none'; mutedWarning.style.display = 'none';
+    toolbarWrapper.classList.remove('is-recording'); mutedWarning.style.display = 'none';
     setStatus('Recording stopped. Finishing the upload; please keep this tab open.', 'status-uploading');
     sendWs({ type: 'recording-stopped' });
     kickUploader();
@@ -726,29 +873,25 @@
   function releaseWakeLock() { try { if (wakeLock) wakeLock.release(); } catch {} wakeLock = null; }
   document.addEventListener('visibilitychange', () => { if (isRecording && document.visibilityState === 'visible') holdWakeLock(); });
 
-  function setDeviceSwitching(enabled) {
-    tbCamSwitch.disabled = !enabled; tbMicSwitch.disabled = !enabled;
-    tbCamSwitch.title = enabled ? 'Switch camera' : 'Stop recording to switch camera';
-    tbMicSwitch.title = enabled ? 'Switch mic' : 'Stop recording to switch mic';
-  }
-
   // ========================================================
   // Toolbar
   // ========================================================
   tbMute.addEventListener('click', () => { isMuted = !isMuted; applyMuteState(); broadcastControlState(); });
   function applyMuteState() {
     const t = mediaStream && mediaStream.getAudioTracks()[0]; if (t) t.enabled = !isMuted;
-    tbMute.classList.toggle('active', isMuted);
-    tbMuteIcon.textContent = isMuted ? '🔇' : '🎤';
+    micPair.classList.toggle('off', isMuted);
     tbMuteLabel.textContent = isMuted ? 'Unmute' : 'Mute';
+    const mt = isMuted ? 'Unmute microphone' : 'Mute microphone';
+    tbMute.title = mt; tbMute.setAttribute('aria-label', mt); tbMute.setAttribute('aria-pressed', String(isMuted));
     mutedWarning.style.display = isMuted && isRecording ? 'flex' : 'none';
   }
   tbVideo.addEventListener('click', () => { isCameraOff = !isCameraOff; applyVideoState(); broadcastControlState(); });
   function applyVideoState() {
     const t = mediaStream && mediaStream.getVideoTracks()[0]; if (t) t.enabled = !isCameraOff;
-    tbVideo.classList.toggle('active', isCameraOff);
-    tbVideoIcon.textContent = isCameraOff ? '🚫' : '📷';
-    tbVideoLabel.textContent = isCameraOff ? 'Video On' : 'Video Off';
+    camPair.classList.toggle('off', isCameraOff);
+    tbVideoLabel.textContent = isCameraOff ? 'Start video' : 'Stop video';
+    const vt = isCameraOff ? 'Start video' : 'Stop video';
+    tbVideo.title = vt; tbVideo.setAttribute('aria-label', vt); tbVideo.setAttribute('aria-pressed', String(isCameraOff));
   }
   function broadcastControlState() {
     sendWs({
@@ -759,16 +902,26 @@
   }
 
   async function showDeviceMenu(kind, dropdown, otherDropdown) {
-    if (isRecording) return;
     if (dropdown.classList.contains('show')) { dropdown.classList.remove('show'); return; }
     otherDropdown.classList.remove('show');
     const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === kind);
     dropdown.innerHTML = '';
     const current = kind === 'videoinput' ? selectedCameraId : selectedMicId;
+    const heading = document.createElement('div');
+    heading.className = 'dev-heading';
+    heading.textContent = kind === 'videoinput' ? 'Select a camera' : 'Select a microphone';
+    dropdown.appendChild(heading);
+    if (isRecording) {
+      const note = document.createElement('div');
+      note.className = 'dev-note';
+      note.textContent = `To keep this take clean, change your ${kind === 'videoinput' ? 'camera' : 'microphone'} after recording stops.`;
+      dropdown.appendChild(note);
+    }
     devs.forEach(d => {
       const b = document.createElement('button');
       b.className = 'dev-dropdown-item' + (d.deviceId === current ? ' selected' : '');
       b.textContent = d.label || (kind === 'videoinput' ? 'Camera' : 'Microphone');
+      b.disabled = isRecording;
       b.addEventListener('click', async () => {
         dropdown.classList.remove('show');
         if (d.deviceId === current) return;
@@ -782,6 +935,7 @@
   }
   tbCamSwitch.addEventListener('click', () => showDeviceMenu('videoinput', camDropdown, micDropdown));
   tbMicSwitch.addEventListener('click', () => showDeviceMenu('audioinput', micDropdown, camDropdown));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { camDropdown.classList.remove('show'); micDropdown.classList.remove('show'); } });
   document.addEventListener('click', e => {
     if (!e.target.closest('#tb-cam-switch') && !e.target.closest('#cam-dropdown')) camDropdown.classList.remove('show');
     if (!e.target.closest('#tb-mic-switch') && !e.target.closest('#mic-dropdown')) micDropdown.classList.remove('show');
@@ -797,7 +951,7 @@
       screenTrack = await new TrackRecorder(screenStream, { fileType: 'screen', mime: videoMime, videoBps: VIDEO_BPS, recIndex: recIndex }).start();
       lockedRecs.add(screenTrack.rec.id);
       isScreenSharing = true;
-      tbScreen.classList.add('screen-active'); tbScreenLabel.textContent = 'Stop';
+      tbScreen.classList.add('sharing'); tbScreenLabel.textContent = 'Stop sharing'; tbScreen.title = 'Stop sharing';
       screenThumbContainer.style.display = 'block'; screenThumbVideo.srcObject = screenStream;
       screenStream.getVideoTracks()[0].onended = () => { if (isScreenSharing) stopScreenShare(); };
       broadcastControlState(); sendWs({ type: 'guest:screen-share-started' });
@@ -810,7 +964,7 @@
     isScreenSharing = false;
     const t = screenTrack; screenTrack = null;
     if (screenStream) screenStream.getTracks().forEach(tr => tr.stop());
-    tbScreen.classList.remove('screen-active'); tbScreenLabel.textContent = 'Screen';
+    tbScreen.classList.remove('sharing'); tbScreenLabel.textContent = 'Share screen'; tbScreen.title = 'Share screen';
     screenThumbContainer.style.display = 'none';
     broadcastControlState(); sendWs({ type: 'guest:screen-share-stopped' });
     if (t) { await t.stop(); lockedRecs.delete(t.rec.id); kickUploader(); }

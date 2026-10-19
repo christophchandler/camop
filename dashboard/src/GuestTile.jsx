@@ -17,6 +17,53 @@ const STATUS_CONFIG = {
 
 const mb = b => (b / 1048576).toFixed(b > 100 * 1048576 ? 0 : 1);
 
+// Must match the guest page's tiers.
+const QUALITY = [
+  { id: 'low', label: 'Low bandwidth', detail: '1080p, 3 Mbps', needMbps: 0, gbPerHour: 1.4 },
+  { id: 'standard', label: '1080p Standard', detail: '6 Mbps', needMbps: 8, gbPerHour: 2.7 },
+  { id: 'high', label: '1080p High', detail: '10 Mbps', needMbps: 13, gbPerHour: 4.5 },
+  { id: '4k', label: '4K', detail: '20 Mbps', needMbps: 26, gbPerHour: 9 },
+];
+
+function QualityPicker({ guest, sendCommand, disabled }) {
+  const sp = guest.speed;
+  const chosen = guest.quality || (sp && sp.recommended) || 'standard';
+  const camLabel = sp && sp.camMaxW ? `${sp.camMaxW}x${sp.camMaxH}` : null;
+  const fits = q => !sp || sp.failed || sp.uploadMbps >= q.needMbps;
+  const camOk = q => q.id !== '4k' || !sp || (sp.camMaxW >= 3840);
+  const pick = QUALITY.find(q => q.id === chosen) || QUALITY[1];
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-[12px]">
+      <span className="text-gray-500">
+        {!sp ? 'Testing connection...' : sp.failed ? 'Speed test failed' : <>Upload <span className="text-gray-300 font-mono">{sp.uploadMbps} Mbps</span></>}
+        {camLabel && <> · camera up to <span className="text-gray-300 font-mono">{camLabel}</span></>}
+      </span>
+      <label className="flex items-center gap-2 text-gray-400">
+        Quality
+        <select
+          value={chosen}
+          disabled={disabled}
+          onChange={e => sendCommand('producer:set-quality', { guestId: guest.id, quality: e.target.value })}
+          className="bg-white/[0.04] border border-white/[0.1] rounded-lg px-2 py-1 text-gray-200 text-[12px] disabled:opacity-50"
+        >
+          {QUALITY.map(q => (
+            <option key={q.id} value={q.id}>
+              {q.label} ({q.detail}){sp && sp.recommended === q.id ? ', recommended' : ''}{!camOk(q) ? ', camera is not 4K' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      {sp && !sp.failed && !fits(pick) && (
+        <span className="text-amber-400">Faster than their upload: the file will finish uploading after the call.</span>
+      )}
+      {sp && !camOk(pick) && (
+        <span className="text-amber-400">Their camera tops out at {camLabel}, so 4K will record at that size.</span>
+      )}
+      <span className="text-gray-600">about {pick.gbPerHour} GB per hour</span>
+    </div>
+  );
+}
+
 function Health({ guest }) {
   const s = guest.stats;
   const [now, setNow] = useState(Date.now());
@@ -29,6 +76,7 @@ function Health({ guest }) {
   if (guest.status === 'disconnected') warnings.push(s.recording ? 'Lost connection. Their computer keeps recording and will upload when it reconnects.' : 'Lost connection.');
   else if (age > 10) warnings.push(`No update from the guest for ${age}s`);
   if (s.recording && s.micLevel < 0.01) warnings.push('Mic is silent');
+  if (s.recording && !s.cameraOff && s.brightness >= 0 && s.brightness < 0.04) warnings.push('Camera image looks black. Another app may have taken the camera, or the lens is covered.');
   if (s.recording && s.width && s.width < 1280) warnings.push(`Camera is only ${s.width}x${s.height}`);
   if (s.storageFreeMB && s.storageFreeMB < 3000) warnings.push(`Low disk space: ${(s.storageFreeMB / 1024).toFixed(1)} GB free`);
   if (s.lastError) warnings.push(s.lastError);
@@ -91,17 +139,29 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
     <div className={`glass-hover p-5 transition-all duration-500 ${isActive ? 'border-red-500/20 shadow-lg shadow-red-500/5' : ''}`}>
       {/* Top row */}
       <div className="flex items-center gap-4">
-        {/* Avatar circle with status */}
+        {/* Live thumbnail (updates every 5 s), avatar until the first frame arrives */}
         <div className="relative flex-shrink-0">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-brand-400/20 to-brand-600/20 flex items-center justify-center text-brand-400 font-bold text-sm">
-            {guest.name.charAt(0).toUpperCase()}
-          </div>
-          <div className={`absolute -bottom-0.5 -right-0.5 status-dot ${config.color} ${isActive ? 'animate-pulse' : ''}`} />
+          {guest.thumbAt ? (
+            <img
+              src={`/api/sessions/${sessionId}/thumb/${guest.id}?v=${guest.thumbAt}`}
+              alt={`${guest.name} camera`}
+              className="w-40 aspect-video object-cover rounded-lg bg-black border border-white/[0.08]"
+            />
+          ) : (
+            <div className="w-40 aspect-video rounded-lg bg-white/[0.03] border border-white/[0.06] flex items-center justify-center text-brand-400 font-bold text-lg">
+              {guest.name.charAt(0).toUpperCase()}
+            </div>
+          )}
+          <div className={`absolute top-1.5 left-1.5 status-dot ${config.color} ${isActive ? 'animate-pulse' : ''}`} />
+          {guest.thumbAt && Date.now() - guest.thumbAt > 20000 && (
+            <div className="absolute bottom-1 right-1 text-[10px] px-1.5 py-0.5 rounded bg-black/70 text-gray-300">{Math.round((Date.now() - guest.thumbAt) / 1000)}s old</div>
+          )}
         </div>
 
         {/* Info */}
         <div className="flex-1 min-w-0">
           <div className="text-white font-semibold truncate">{guest.name}</div>
+          {guest.activeCamera && <div className="text-[11px] text-gray-500 truncate">{guest.activeCamera}</div>}
           <div className={`text-xs ${config.text} flex items-center gap-2`}>
             <span>{config.label}</span>
             {isActive && (
@@ -147,7 +207,7 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
           )}
           {canStart && (
             <button
-              onClick={() => sendCommand('start-recording', { guestId: guest.id })}
+              onClick={() => sendCommand('start-recording', { guestId: guest.id, quality: guest.quality || (guest.speed && guest.speed.recommended) || 'standard' })}
               className="px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-emerald-500/20"
               style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}
             >
@@ -164,6 +224,10 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
           )}
         </div>
       </div>
+
+      {['connected', 'setting-up', 'ready', 'done'].includes(guest.status) && (
+        <QualityPicker guest={guest} sendCommand={sendCommand} disabled={false} />
+      )}
 
       <Health guest={guest} />
 

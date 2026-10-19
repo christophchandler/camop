@@ -72,6 +72,8 @@ function addGuestToSession(sessionId, guestId, name, ws) {
     pendingRequest: null,
     consentAt: null,
     stats: null,
+    speed: null,     // { uploadMbps, camMaxW, camMaxH, recommended }
+    quality: null,   // producer's choice; falls back to speed.recommended
     wasRecording: false,
     lastSeen: Date.now()
   });
@@ -161,6 +163,9 @@ function serializeSession(session) {
       pendingRequest: guest.pendingRequest,
       consentAt: guest.consentAt,
       stats: guest.stats,
+      speed: guest.speed,
+      thumbAt: guest.thumbAt || null,
+      quality: guest.quality,
       lastSeen: guest.lastSeen
     });
   }
