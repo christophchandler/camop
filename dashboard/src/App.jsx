@@ -86,16 +86,18 @@ export default function App() {
     };
   }, [activeSessionId]);
 
-  const createSession = async (name) => {
+  const createSession = async (details) => {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
+      body: JSON.stringify(details)
     });
-    if (res.status === 401) { setNeedLogin(true); return; }
+    if (res.status === 401) { setNeedLogin(true); return null; }
+    if (!res.ok) return (await res.json().catch(() => ({}))).error || 'Could not create the session';
     const session = await res.json();
     setSessions(prev => [session, ...prev]);
     setActiveSessionId(session.id);
+    return null;
   };
 
   const sendCommand = useCallback((type, payload = {}) => {
@@ -147,7 +149,7 @@ export default function App() {
                     >
                       <div>
                         <div className="text-sm text-white font-medium group-hover/item:text-brand-400 transition-colors">{s.name}</div>
-                        <div className="text-xs text-gray-600">{new Date(s.createdAt).toLocaleString()}</div>
+                        <div className="text-xs text-gray-600">{new Date(s.createdAt).toLocaleString()}{s.folder ? ` · ${s.folder}` : ''}</div>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-gray-600">{s.guests.length} guest{s.guests.length !== 1 ? 's' : ''}</span>

@@ -12,8 +12,10 @@ Every stored file is downloaded and checked with ffprobe.
 Usage:  python3 tests/e2e_test.py
 Needs:  pip install "moto[server]" boto3 playwright ; Chromium for Playwright ; ffprobe
 """
+import datetime
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -34,6 +36,8 @@ ENV = dict(os.environ,
            B2_BUCKET_NAME=BUCKET, DASHBOARD_PASSWORD=PASSWORD, PORT=str(APP_PORT), NODE_ENV='test')
 
 results = []
+from zoneinfo import ZoneInfo
+FOLDER = datetime.datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%y%m%d') + '_BonsaiRobotics_ExecInterviews'
 
 
 def check(name, ok, detail=''):
@@ -82,10 +86,15 @@ def main():
         prod.goto(BASE)
         prod.fill('input[type=password]', PASSWORD)
         prod.click('button[type=submit]')
-        prod.fill('input[placeholder="Name your session..."]', 'E2E session')
-        prod.keyboard.press('Enter')
+        prod.fill('input[aria-label="Client"]', 'bonsai robotics')
+        prod.fill('input[aria-label="Project"]', 'Exec Interviews')
+        preview = prod.inner_text('text=Saves to Projects/')
+        prod.click('button:has-text("Start Session")')
         link = wait_for(lambda: _link(prod), 15, what='magic link')
         check('Dashboard sign-in and signed guest link', '&t=' in link, link.split('?')[1][:40] + '...')
+        check('Folder preview shown before creating', FOLDER in preview, preview)
+        wait_for(lambda: FOLDER in prod.inner_text('body'), 10, what='saving-to line')
+        check('Session shows where files are saved', f'Projects/{FOLDER}/2_FOOTAGE/1_VIDEO/CAMOP' in prod.inner_text('body'))
 
         # Wrong token is rejected
         bad = link.split('&t=')[0] + '&t=wrong'
@@ -137,7 +146,13 @@ def main():
         guest.wait_for_selector('#setup-modal.active', timeout=15000)
         guest.click('#setup-confirm-btn')
         start_take()
-        time.sleep(8)
+        # Switch-camera request during a take: the guest is told, not silently refused
+        prod.locator('button:has-text("Switch Device")').first.click()
+        guest.wait_for_selector('#toast-container.show', timeout=10000)
+        toast = guest.inner_text('#toast-text')
+        check('Switch-camera request shows on the guest during a take', 'as soon as this take stops' in toast, toast)
+        guest.click('#toast-approve')
+        time.sleep(6)
         app.send_signal(signal.SIGKILL)
         app.wait()
         time.sleep(10)  # recording keeps going with the server gone
@@ -146,6 +161,11 @@ def main():
         wait_for(lambda: _try(lambda: urllib.request.urlopen(f'{BASE}/api/health').read()), 20, what='server restart')
         time.sleep(8)
         check('Recording continued while the server was down', still)
+        prod.reload()
+        wait_for(lambda: 'previous session' in prod.inner_text('body'), 20, what='session list after restart')
+        prod.click('summary:has-text("previous session")')
+        check('Session name and folder restored after a server crash', FOLDER in prod.inner_text('body'))
+        prod.locator('button:has-text("Exec Interviews")').first.click()
         # Producer's dashboard reconnects on its own; stop from the tile
         wait_for(lambda: prod.locator('button:has-text("Stop")').count() > 0, 30, what='Stop button after restart')
         prod.locator('button:has-text("Stop")').first.click()
@@ -155,12 +175,29 @@ def main():
         check('Stored size matches recorded size (all takes)', all(r['completeSize'] == r['totalBytes'] for r in recs))
         wait_for(lambda: 'All saved' in guest.inner_text('#recovery-bar'), 15, what='All saved message')
         check('Guest sees "All saved"', True)
+        time.sleep(1)
+        check('Camera menu opens once the take stops', guest.evaluate("document.getElementById('cam-dropdown').classList.contains('show')"))
+        time.sleep(3)  # let the manifest save
         browser.close()
 
     # Verify every stored object is a playable media file
     objs = s3.list_objects_v2(Bucket=BUCKET).get('Contents', [])
-    check('Files in storage', len(objs) >= 4, ', '.join(o['Key'].split('/')[-1] for o in objs))
-    for o in objs:
+    prefix = f'{FOLDER}/2_FOOTAGE/1_VIDEO/CAMOP/'
+    media = [o for o in objs if not o['Key'].endswith('.json')]
+    check('Files in storage', len(media) >= 4, ', '.join(o['Key'].split('/')[-1] for o in media))
+    check('Every file is inside the project folder', all(o['Key'].startswith(prefix) for o in objs), objs[0]['Key'] if objs else '')
+    name_re = re.compile(r'^\d{8}_\d{6}_TestGuest_(CAM|AUDIO)_take(\d\d)\.(mp4|m4a|webm|ogg)$')
+    names = [o['Key'].split('/')[-1] for o in media]
+    check('File names read like 20261019_141502_TestGuest_CAM_take01.mp4', all(name_re.match(n) for n in names), ', '.join(names))
+    takes = sorted({name_re.match(n).group(2) for n in names if name_re.match(n)})
+    check('Takes numbered by the server (take01, take02)', takes == ['01', '02'], str(takes))
+    manifests = [o for o in objs if o['Key'].endswith('.json')]
+    doc = json.loads(s3.get_object(Bucket=BUCKET, Key=manifests[0]['Key'])['Body'].read()) if manifests else {}
+    listed = {f['fileName'] for g in doc.get('guests', []) for f in g.get('files', [])}
+    check('Session manifest saved next to the files and lists them', len(manifests) == 1 and doc.get('folder') == FOLDER
+          and set(names) <= listed and doc.get('client') == 'bonsai robotics', manifests[0]['Key'].split('/')[-1] if manifests else 'none')
+    check('Manifest holds no guest link token', 't=' not in json.dumps(doc) and '"t"' not in json.dumps(doc))
+    for o in media:
         path = os.path.join(tmp, o['Key'].split('/')[-1])
         s3.download_file(BUCKET, o['Key'], path)
         # Full decode catches truncated or corrupt files that a header probe would miss
@@ -169,7 +206,7 @@ def main():
                                            '-of', 'json', path], capture_output=True, text=True).stdout or '{}')
         kinds = sorted(s['codec_type'] for s in probe.get('streams', []))
         dur = probe.get('format', {}).get('duration')
-        expect = ['audio'] if '_audio_' in path else ['audio', 'video']
+        expect = ['audio'] if '_AUDIO_' in path else ['audio', 'video']
         # Duplicate timestamps from MediaRecorder under CPU load are a muxer warning, not lost data.
         decode_errors = [l for l in dec.stderr.splitlines() if l.strip() and 'non monotonically increasing dts' not in l]
         check(f"Decodes cleanly: {os.path.basename(path)}", kinds == expect and not decode_errors,

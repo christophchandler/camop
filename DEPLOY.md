@@ -7,24 +7,35 @@
 - Records a separate audio-only safety file alongside every take.
 - Guest links are signed; the dashboard needs a password.
 - Live health on each guest tile: MB recorded and uploaded, resolution, mic level, warnings.
+- Each session belongs to a project folder. Files are saved as
+  `261019_Client_Project/2_FOOTAGE/1_VIDEO/CAMOP/20261019_141502_Guest_CAM_take01.mp4`, with a
+  `camop_session_<id>.json` manifest beside them. A server restart restores sessions from those manifests.
+
+## Storage (keep CamOp away from the backup)
+- CamOp has its own bucket, `christopherandcompany-camop`, and a key that can only reach it
+  (`camop-railway`, Read and Write). Never point CamOp at the studio backup bucket.
+- The bucket root mirrors the Shadow server's Projects folder. Synology Cloud Sync task "CamOp":
+  key `shadow-cloudsync` (that bucket only, Read Only, list bucket names), remote path = bucket root,
+  local path = `christopherandcompany/Projects`, "Download remote changes only", and
+  "Don't remove files in the destination folder when they are removed in the source folder" ticked.
 
 ## Deploy on Railway
 1. Railway: Hobby plan, then New Project > Deploy from GitHub repo > `christophchandler/camop`, branch `mvp` (or point the existing camop service at the `mvp` branch).
 2. Variables (service > Variables):
    - `B2_ACCOUNT_ID` = the application key's keyID
    - `B2_APPLICATION_KEY` = the application key
-   - `B2_BUCKET_NAME` = e.g. `camop-recordings`
+   - `B2_BUCKET_NAME` = `christopherandcompany-camop`
    - `B2_BUCKET_ENDPOINT` = `https://` + the bucket's Endpoint, e.g. `https://s3.us-west-004.backblazeb2.com`
    - `DASHBOARD_PASSWORD` = a long password
 3. Settings > Networking > Generate Domain. Open `https://<domain>/api/health`: `storageConfigured` must be `true`.
 
 ## Five-minute self-test (do this before a real call)
-1. Open the dashboard, sign in, create a session, copy the link.
+1. Open the dashboard, sign in, enter Client and Project (or tick "already on the server" and paste the folder name), create the session, copy the link.
 2. Open the link in a second browser window, type a name, tick consent, Join, confirm devices.
 3. Start Recording from the dashboard. Within about 30 seconds the tile should show MB uploaded climbing.
 4. Reload the guest window mid-recording. It should show "Saving your recording" and finish on its own.
 5. Join again, record 30 seconds, Stop. The tile lists a camera file and an audio file with sizes.
-6. In Backblaze, open the bucket: files are under `recordings/<session id>/`. Download one and play it.
+6. Within a few minutes the files show up on the Shadow server under `Projects/<folder>/2_FOOTAGE/1_VIDEO/CAMOP/`. Play one.
 
 ## On a real call
 - Guest on a laptop or desktop, Chrome or Safari, wired headphones, plugged in.
@@ -33,4 +44,4 @@
 - Chrome's MP4 files are variable frame rate. If Descript shows drift, use its Repair audio drift tool or convert to constant frame rate first.
 
 ## Test suite
-`python3 tests/e2e_test.py` runs a local S3, the server and headless Chrome with a fake camera, then checks upload-while-recording, a mid-take reload, a server crash mid-take, and decodes every stored file.
+`python3 tests/e2e_test.py` runs a local S3, the server and headless Chrome with a fake camera, then checks upload-while-recording, a mid-take reload, a server crash mid-take, the project folder layout, file names, take numbers, the session manifest and its restore after a crash, the switch-camera request during a take, and decodes every stored file.

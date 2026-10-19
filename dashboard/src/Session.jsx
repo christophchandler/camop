@@ -31,7 +31,8 @@ export default function Session({ session, sendCommand }) {
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-xl font-bold text-white mb-1">{session.name}</h2>
-            <p className="text-xs text-gray-500 font-mono">ID: {session.id}</p>
+            {session.path && <p className="text-xs text-gray-400 font-mono break-all">Saving to {session.path}</p>}
+            {session.brief && <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{session.brief}</p>}
           </div>
           <div className="flex gap-2">
             {hasReadyGuests && (
@@ -84,7 +85,7 @@ export default function Session({ session, sendCommand }) {
         </div>
         <p className="text-xs text-gray-600 mt-2 ml-1">Drop this link in your meeting chat. Guests click it to join.</p>
         {session.recovered && (
-          <p className="text-xs text-amber-400 mt-2 ml-1">The server restarted during this session. Guests reconnect on their own and keep recording; the session name and history before the restart are not shown.</p>
+          <p className="text-xs text-amber-400 mt-2 ml-1">CamOp has no saved record of this session, so its files go to Projects/_CamOp_Unsorted. Recordings are safe; start a new session to file them under a project.</p>
         )}
       </div>
 

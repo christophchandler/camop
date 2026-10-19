@@ -1,13 +1,40 @@
 import { useState } from 'react';
 
+// Mirrors server/project.js so the producer sees the folder before creating it.
+function yymmdd() {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())) p[x.type] = x.value;
+  return `${p.year.slice(2)}${p.month}${p.day}`;
+}
+function squash(text, max = 40) {
+  return String(text || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .split(/[^A-Za-z0-9&-]+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join('').slice(0, max);
+}
+function cleanFolder(text) {
+  return String(text || '').trim().replace(/[\/\\:*?"<>|]+/g, '_').replace(/^[.\s]+/, '').slice(0, 120);
+}
+
+const field = 'w-full px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-gray-500 outline-none focus:border-brand-500/50 text-sm';
+
 export default function Landing({ onCreateSession }) {
-  const [name, setName] = useState('');
+  const [client, setClient] = useState('');
+  const [project, setProject] = useState('');
+  const [useExisting, setUseExisting] = useState(false);
+  const [folder, setFolder] = useState('');
+  const [brief, setBrief] = useState('');
   const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
+
+  const existing = useExisting ? cleanFolder(folder) : '';
+  const autoFolder = [yymmdd(), squash(client), squash(project)].filter(Boolean).join('_');
+  const target = existing || (squash(client) ? autoFolder : '');
+  const canCreate = Boolean(target) && !creating;
 
   const handleCreate = async () => {
-    if (!name.trim()) return;
-    setCreating(true);
-    await onCreateSession(name.trim());
+    if (!canCreate) return;
+    setCreating(true); setError('');
+    const err = await onCreateSession({ client: client.trim(), project: project.trim(), folder: existing, brief: brief.trim() });
+    if (err) setError(err);
     setCreating(false);
   };
 
@@ -44,30 +71,29 @@ export default function Landing({ onCreateSession }) {
         </div>
 
         {/* Create Session */}
-        <div className="animate-slide-up max-w-md mx-auto" style={{ animationDelay: '0.15s', animationFillMode: 'both' }}>
-          <div className="glass p-2 flex gap-2">
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleCreate()}
-              placeholder="Name your session..."
-              className="flex-1 bg-transparent border-none px-4 py-3 text-white placeholder-gray-500 outline-none text-sm"
-            />
-            <button
-              onClick={handleCreate}
-              disabled={creating || !name.trim()}
-              className="btn-brand text-sm whitespace-nowrap"
-            >
-              {creating ? (
-                <span className="flex items-center gap-2">
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Creating...
-                </span>
-              ) : 'Start Session'}
+        <div className="animate-slide-up max-w-md mx-auto text-left" style={{ animationDelay: '0.15s', animationFillMode: 'both' }}>
+          <div className="glass p-5 space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <input type="text" value={client} onChange={e => setClient(e.target.value)} placeholder="Client" aria-label="Client" className={field} autoFocus />
+              <input type="text" value={project} onChange={e => setProject(e.target.value)} placeholder="Project" aria-label="Project"
+                onKeyDown={e => e.key === 'Enter' && handleCreate()} className={field} />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+              <input type="checkbox" checked={useExisting} onChange={e => setUseExisting(e.target.checked)} />
+              Add to a project folder that's already on the server
+            </label>
+            {useExisting && (
+              <input type="text" value={folder} onChange={e => setFolder(e.target.value)} placeholder="Folder name, e.g. 261008_BonsaiRobotics_RFM"
+                aria-label="Existing project folder" className={`${field} font-mono`} />
+            )}
+            <textarea value={brief} onChange={e => setBrief(e.target.value)} rows={2} placeholder="Brief (optional): who, what it's for, the questions"
+              aria-label="Brief" className={`${field} resize-none`} />
+            <div className="text-[11px] text-gray-500 font-mono break-all min-h-[1rem]">
+              {target ? <>Saves to Projects/<span className="text-gray-300">{target}</span>/2_FOOTAGE/1_VIDEO/CAMOP</> : 'Enter a client to see where the files go'}
+            </div>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            <button onClick={handleCreate} disabled={!canCreate} className="btn-brand text-sm w-full py-3">
+              {creating ? 'Creating...' : 'Start Session'}
             </button>
           </div>
         </div>
