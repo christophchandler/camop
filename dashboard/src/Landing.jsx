@@ -115,9 +115,11 @@ export default function Landing({ onCreateSession }) {
       </div>
 
       {/* Footer */}
-      <div className="absolute bottom-6 text-xs text-gray-600 animate-fade-in" style={{ animationDelay: '0.5s', animationFillMode: 'both' }}>
-        Built by Christopher & Company
-      </div>
+      <a href="https://christopherandcompany.tv" target="_blank" rel="noopener noreferrer"
+        className="relative z-10 mt-14 mb-24 opacity-60 hover:opacity-100 transition-opacity animate-fade-in"
+        style={{ animationDelay: '0.5s', animationFillMode: 'both' }} aria-label="Christopher & Company">
+        <img src="/cc-logo-white.svg" alt="Christopher & Company" className="h-6 w-auto" />
+      </a>
     </div>
   );
 }
