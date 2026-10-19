@@ -178,6 +178,11 @@ def main():
         time.sleep(1)
         check('Camera menu opens once the take stops', guest.evaluate("document.getElementById('cam-dropdown').classList.contains('show')"))
         time.sleep(3)  # let the manifest save
+        # Producer download from the dashboard: signed link to storage, exact bytes
+        href = prod.locator('a:has-text("Download")').first.get_attribute('href')
+        dl = prod.request.get(BASE + href, max_redirects=5)
+        check('Dashboard Download link returns the file', dl.status == 200 and len(dl.body()) > 1000 and 'attachment' in (dl.headers.get('content-disposition') or ''),
+              f"status={dl.status} bytes={len(dl.body())}")
         browser.close()
 
     # Verify every stored object is a playable media file

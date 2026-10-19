@@ -38,8 +38,12 @@ function squash(text, max = 40) {
 // An existing folder name typed by the producer, e.g. "261008_BonsaiRobtoics_RFM".
 // Slashes, colons and leading dots would break the path on the server, so they go.
 function cleanFolder(text) {
-  return String(text || '').trim()
-    .replace(/[\/\\:*?"<>|\x00-\x1f]+/g, '_')
+  // A dragged-in or pasted path keeps only its last part, without quotes.
+  let t = String(text || '').trim().replace(/^['"\u2018\u2019\u201c\u201d]+|['"\u2018\u2019\u201c\u201d]+$/g, '').trim();
+  t = t.replace(/[\/\\]+$/, '');
+  if (/[\/\\]/.test(t)) t = t.split(/[\/\\]/).pop();
+  return t
+    .replace(/[\/\\:*?"'<>|\x00-\x1f]+/g, '_')
     .replace(/^[.\s]+/, '').replace(/\s+$/, '')
     .slice(0, 120);
 }

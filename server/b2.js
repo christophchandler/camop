@@ -47,8 +47,11 @@ async function generatePresignedPutUrl(key, contentType) {
   return getSignedUrl(getClient(), command, { expiresIn: 3600 });
 }
 
-async function generatePresignedGetUrl(key) {
-  const command = new GetObjectCommand({ Bucket: BUCKET(), Key: key });
+async function generatePresignedGetUrl(key, downloadName) {
+  const command = new GetObjectCommand({
+    Bucket: BUCKET(), Key: key,
+    ...(downloadName ? { ResponseContentDisposition: `attachment; filename="${downloadName.replace(/[^\w.-]/g, '_')}"` } : {})
+  });
   return getSignedUrl(getClient(), command, { expiresIn: 3600 });
 }
 

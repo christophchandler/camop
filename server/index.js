@@ -225,6 +225,22 @@ app.put('/api/thumb', (req, res) => {
   });
   req.on('error', () => { if (!res.headersSent) res.status(400).end(); });
 });
+// Producer download: a one-hour signed link straight to storage, so a browser
+// download never depends on the storage provider's web console.
+app.get('/api/sessions/:id/download', requireProducer, async (req, res) => {
+  const session = S.getSession(req.params.id);
+  const key = String(req.query.key || '');
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  const known = [...session.guests.values()].some(g => g.files.some(f => f.key === key));
+  if (!known) return res.status(404).json({ error: 'File not found in this session' });
+  try {
+    res.redirect(302, await storage.generatePresignedGetUrl(key, key.split('/').pop()));
+  } catch (err) {
+    console.error('download link failed:', err.name || err.message);
+    res.status(502).json({ error: 'Storage unavailable' });
+  }
+});
+
 app.get('/api/sessions/:id/thumb/:guestId', requireProducer, (req, res) => {
   const session = S.getSession(req.params.id);
   const guest = session && session.guests.get(req.params.guestId);

@@ -283,6 +283,12 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
                 {file.durationMs && (
                   <span className="text-gray-600 text-[11px]">{Math.round(file.durationMs / 1000)}s</span>
                 )}
+                {file.status !== 'needs-conversion' && file.key && (
+                  <a href={`/api/sessions/${sessionId}/download?key=${encodeURIComponent(file.key)}`}
+                    className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/[0.06] text-gray-300 border border-white/[0.1] hover:bg-white/[0.12] transition-colors">
+                    Download
+                  </a>
+                )}
                 {file.status === 'needs-conversion' && (
                   <button
                     onClick={() => triggerConversion(i)}

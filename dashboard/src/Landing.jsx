@@ -11,7 +11,10 @@ function squash(text, max = 40) {
     .split(/[^A-Za-z0-9&-]+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join('').slice(0, max);
 }
 function cleanFolder(text) {
-  return String(text || '').trim().replace(/[\/\\:*?"<>|]+/g, '_').replace(/^[.\s]+/, '').slice(0, 120);
+  let t = String(text || '').trim().replace(/^['"\u2018\u2019\u201c\u201d]+|['"\u2018\u2019\u201c\u201d]+$/g, '').trim();
+  t = t.replace(/[\/\\]+$/, '');
+  if (/[\/\\]/.test(t)) t = t.split(/[\/\\]/).pop();
+  return t.replace(/[\/\\:*?"'<>|]+/g, '_').replace(/^[.\s]+/, '').slice(0, 120);
 }
 
 const field = 'w-full px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-gray-500 outline-none focus:border-brand-500/50 text-sm';
@@ -83,7 +86,7 @@ export default function Landing({ onCreateSession }) {
               Add to a project folder that's already on the server
             </label>
             {useExisting && (
-              <input type="text" value={folder} onChange={e => setFolder(e.target.value)} placeholder="Folder name, e.g. 261008_BonsaiRobotics_RFM"
+              <input type="text" value={folder} onChange={e => setFolder(e.target.value)} placeholder="Folder name or path, e.g. 261008_BonsaiRobotics_RFM"
                 aria-label="Existing project folder" className={`${field} font-mono`} />
             )}
             <textarea value={brief} onChange={e => setBrief(e.target.value)} rows={2} placeholder="Brief (optional): who, what it's for, the questions"
