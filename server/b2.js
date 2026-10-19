@@ -100,6 +100,12 @@ async function abortMultipart(key, uploadId) {
   await getClient().send(new AbortMultipartUploadCommand({ Bucket: BUCKET(), Key: key, UploadId: uploadId }));
 }
 
+// A byte range of a stored file, as a Buffer (used to copy files on to Google Drive).
+async function getRange(key, start, end) {
+  const res = await getClient().send(new GetObjectCommand({ Bucket: BUCKET(), Key: key, Range: `bytes=${start}-${end}` }));
+  return Buffer.from(await res.Body.transformToByteArray());
+}
+
 async function headObject(key) {
   const res = await getClient().send(new HeadObjectCommand({ Bucket: BUCKET(), Key: key }));
   return { size: res.ContentLength };
@@ -131,6 +137,7 @@ async function listKeys(maxPages = 100) {
 }
 
 module.exports = {
+  getRange,
   putText,
   getText,
   listKeys,

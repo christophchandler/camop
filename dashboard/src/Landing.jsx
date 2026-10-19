@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 // Mirrors server/project.js so the producer sees the folder before creating it.
 function yymmdd() {
@@ -28,6 +28,8 @@ export default function Landing({ onCreateSession }) {
   const [fps, setFps] = useState('29.97');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
+  const [drive, setDrive] = useState(null);
+  useEffect(() => { fetch('/api/drive/status').then(r => r.ok ? r.json() : null).then(setDrive).catch(() => {}); }, []);
 
   const existing = useExisting ? cleanFolder(folder) : '';
   const autoFolder = [yymmdd(), squash(client), squash(project)].filter(Boolean).join('_');
@@ -103,6 +105,9 @@ export default function Landing({ onCreateSession }) {
             <div className="text-[11px] text-gray-500 font-mono break-all min-h-[1rem]">
               {target ? <>Saves to Projects/<span className="text-gray-300">{target}</span>/2_FOOTAGE/1_VIDEO/CAMOP</> : 'Enter a client to see where the files go'}
             </div>
+            {drive && drive.configured && drive.ok && <p className="text-[11px] text-emerald-400">Takes are copied to Google Drive: {drive.drive}</p>}
+            {drive && drive.configured && !drive.ok && <p className="text-[11px] text-amber-400">Google Drive isn't reachable: {drive.error}</p>}
+            {drive && !drive.configured && <p className="text-[11px] text-gray-500">Google Drive delivery is off (no service account key set).</p>}
             {error && <p className="text-xs text-red-400">{error}</p>}
             <button onClick={handleCreate} disabled={!canCreate} className="btn-brand text-sm w-full py-3">
               {creating ? 'Creating...' : 'Start Session'}

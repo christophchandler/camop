@@ -39,6 +39,10 @@ results = []
 # CFR=vp9 runs the guest's constant-frame-rate recorder (VP9 + Opus here, since this
 # Chromium has no H.264/AAC encoder); unset, the camera file comes from MediaRecorder.
 CFR = os.environ.get('CFR', '')
+# DRIVE=1 adds Google Drive delivery against tests/fake_drive.py, with injected faults.
+DRIVE = os.environ.get('DRIVE', '')
+DRIVE_PORT = 5077
+DRIVE_FAULTS = os.environ.get('DRIVE_FAULTS', '{"chunk_fail":0.1,"chunk_partial":0.1,"chunk_drop":0.05,"api_fail":0.05}')
 from zoneinfo import ZoneInfo
 FOLDER = datetime.datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%y%m%d') + '_BonsaiRobotics_ExecInterviews'
 
@@ -59,6 +63,19 @@ def wait_for(fn, timeout, step=0.5, what='condition'):
     raise TimeoutError(f'Timed out waiting for {what} (last={last})')
 
 
+def drive_env():
+    pem = subprocess.run(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048'], capture_output=True, text=True).stdout
+    sa = {'type': 'service_account', 'client_email': 'camop-drive@test.iam.gserviceaccount.com', 'private_key': pem,
+          'token_uri': f'http://127.0.0.1:{DRIVE_PORT}/token'}
+    return {'GOOGLE_SERVICE_ACCOUNT_JSON': json.dumps(sa), 'DRIVE_API_BASE': f'http://127.0.0.1:{DRIVE_PORT}/drive/v3',
+            'DRIVE_UPLOAD_BASE': f'http://127.0.0.1:{DRIVE_PORT}/upload/drive/v3', 'DRIVE_CHUNK_MB': '1'}
+
+
+def drive_dump():
+    import urllib.request
+    return json.loads(urllib.request.urlopen(f'http://127.0.0.1:{DRIVE_PORT}/__dump').read())
+
+
 def start_server(log):
     return subprocess.Popen(['node', 'server/index.js'], cwd=ROOT, env=ENV, stdout=log, stderr=subprocess.STDOUT)
 
@@ -68,6 +85,11 @@ def main():
     s3_log = open(os.path.join(tmp, 's3.log'), 'w')
     app_log = open(os.path.join(tmp, 'app.log'), 'w')
     moto = subprocess.Popen(['moto_server', '-p', str(S3_PORT)], stdout=s3_log, stderr=subprocess.STDOUT)
+    fake_drive = None
+    if DRIVE:
+        ENV.update(drive_env())
+        fake_drive = subprocess.Popen([sys.executable, os.path.join(ROOT, 'tests', 'fake_drive.py'), str(DRIVE_PORT)],
+                                      env=dict(os.environ, FAKE_DRIVE_FAULTS=DRIVE_FAULTS), stdout=s3_log, stderr=subprocess.STDOUT)
     s3 = boto3.client('s3', endpoint_url=f'http://127.0.0.1:{S3_PORT}', aws_access_key_id='test',
                       aws_secret_access_key='test-secret', region_name='us-east-1')
     wait_for(lambda: _try(lambda: s3.list_buckets()), 20, what='local S3')
@@ -182,6 +204,23 @@ def main():
         time.sleep(1)
         check('Camera menu opens once the take stops', guest.evaluate("document.getElementById('cam-dropdown').classList.contains('show')"))
         time.sleep(3)  # let the manifest save
+        if DRIVE:
+            prefix = f'CamOp Uploads/{FOLDER}/2_FOOTAGE/1_VIDEO/CAMOP/'
+            def delivered():
+                d = drive_dump()
+                files = [i for i in d['items'] if i['path'].startswith(prefix) and i['mimeType'] != 'application/vnd.google-apps.folder']
+                media = [f for f in files if not f['name'].endswith('.json')]
+                ok = len(media) >= 4 and prod.locator('a:has-text("In Drive")').count() >= 4 and any(f['name'].endswith('.json') for f in files)
+                return (d, files) if ok else None
+            d, drive_files = wait_for(delivered, 240, step=2, what='files delivered to Drive')
+            check('Every take delivered to Google Drive (with faults injected)', True,
+                  f"{len([f for f in drive_files if not f['name'].endswith('.json')])} files; faults: " + json.dumps({k: v for k, v in d['stats'].items() if v}))
+            names = [f['name'] for f in drive_files]
+            check('No duplicate files in Drive', len(names) == len(set(names)), ', '.join(sorted(names)))
+            folders = [i['path'] for i in d['items'] if i['mimeType'] == 'application/vnd.google-apps.folder']
+            check('Drive folders created once each', len(folders) == len(set(folders)), ', '.join(sorted(folders)))
+            body = prod.inner_text('body')
+            check('Dashboard links the session folder in Drive', 'Open in Google Drive' in body)
         # Producer download from the dashboard: signed link to storage, exact bytes
         href = prod.locator('a:has-text("Download")').first.get_attribute('href')
         dl = prod.request.get(BASE + href, max_redirects=5)
@@ -216,6 +255,17 @@ def main():
     for take, d in sorted(durs.items()):
         if 'CAM' in d and 'AUDIO' in d:
             check(f'Take {take}: camera and audio files the same length (within 6 s)', abs(d['CAM'] - d['AUDIO']) < 6, f"camera {d['CAM']:.1f}s, audio {d['AUDIO']:.1f}s")
+    if DRIVE:
+        import hashlib
+        dd = {i['name']: i for i in drive_dump()['items']}
+        same = []
+        for o in media:
+            body = s3.get_object(Bucket=BUCKET, Key=o['Key'])['Body'].read()
+            it = dd.get(o['Key'].split('/')[-1])
+            same.append(bool(it) and it['md5Checksum'] == hashlib.md5(body).hexdigest() and int(it['size']) == len(body))
+        check('Drive copies are byte-for-byte identical to the recordings', all(same) and same, f'{sum(same)}/{len(same)}')
+        man = next((i for n, i in dd.items() if n.startswith('camop_session_')), None)
+        check('Session file in Drive', man is not None)
     for o in media:
         path = os.path.join(tmp, o['Key'].split('/')[-1])
         s3.download_file(BUCKET, o['Key'], path)
@@ -241,6 +291,8 @@ def main():
               f"streams={kinds} duration={dur} errors={len(decode_errors)}")
 
     app.terminate(); moto.terminate()
+    if fake_drive:
+        fake_drive.terminate()
     failed = [r for r in results if not r[1]]
     print(f'\n{len(results) - len(failed)}/{len(results)} checks passed. Logs: {tmp}')
     if failed:

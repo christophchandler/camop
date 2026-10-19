@@ -13,6 +13,7 @@ const S = require('./sessions');
 const P = require('./project');
 const storage = require('./b2');
 const persist = require('./persist');
+const drive = require('./drive');
 const { downloadAndConvert } = require('./converter');
 
 const app = express();
@@ -94,6 +95,7 @@ app.get('/api/health', (req, res) => {
     uptime: Math.floor(process.uptime()),
     sessions: S.sessionCount(),
     storageConfigured: STORAGE_CONFIGURED,
+    driveConfigured: drive.configured(),
     passwordRequired: Boolean(DASHBOARD_PASSWORD)
   });
 });
@@ -137,6 +139,11 @@ app.post('/api/sessions', requireProducer, (req, res) => {
     fps: b.fps === '23.976' ? '23.976' : '29.97'
   });
   res.json({ ...S.serializeSession(session), magicLink: magicLinkFor(req, session.id) });
+});
+
+// Is Google Drive delivery set up and reachable? Shown on the dashboard.
+app.get('/api/drive/status', requireProducer, async (req, res) => {
+  res.json(await drive.status());
 });
 
 app.get('/api/sessions', requireProducer, (req, res) => {
@@ -318,6 +325,7 @@ function finishFile(b, fileInfo, size) {
   const session = S.getSession(b.sessionId);
   if (session) S.addLog(session, `Saved ${fileInfo.fileName} (${(size / 1048576).toFixed(1)} MB)`);
   broadcastSessionUpdate(b.sessionId);
+  if (size > 0) drive.enqueue(b.sessionId, fileInfo.key);
 }
 
 app.post('/api/uploads/abort', async (req, res) => {
@@ -660,6 +668,8 @@ async function boot() {
       console.error('Restoring sessions failed:', err.name || err.message);
     }
     persist.start();
+    drive.start(broadcastSessionUpdate);
+    if (drive.configured()) console.log(`Google Drive delivery on; ${drive.rescan()} file(s) waiting to be copied`);
   }
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => console.log(`CamOp server running on port ${PORT}`));

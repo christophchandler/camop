@@ -32,6 +32,9 @@ export default function Session({ session, sendCommand }) {
           <div>
             <h2 className="text-xl font-bold text-white mb-1">{session.name}</h2>
             {session.path && <p className="text-xs text-gray-400 font-mono break-all">Saving to {session.path}{session.fps ? ` · ${session.fps} fps constant` : ''}</p>}
+            {session.driveFolderLink && (
+              <a href={session.driveFolderLink} target="_blank" rel="noopener noreferrer" className="inline-block mt-1 text-xs font-semibold text-emerald-400 hover:underline">Open in Google Drive</a>
+            )}
             {session.brief && <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{session.brief}</p>}
           </div>
           <div className="flex gap-2">

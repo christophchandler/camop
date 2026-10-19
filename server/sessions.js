@@ -62,6 +62,7 @@ function restoreSession(doc) {
     folder: doc.folder, createdAt: doc.createdAt, takeCount: doc.takeCount, fps: doc.fps
   });
   session.log = Array.isArray(doc.log) ? doc.log.slice(-200) : [];
+  if (typeof doc.driveFolderLink === 'string') session.driveFolderLink = doc.driveFolderLink;
   for (const g of doc.guests || []) {
     if (!g || typeof g.id !== 'string') continue;
     session.guests.set(g.id, blankGuest(g.name || 'Guest', null, {
@@ -82,6 +83,9 @@ function nextTake(session) {
 function getSession(id) {
   return sessions.get(id);
 }
+function allSessionObjects() { return [...sessions.values()]; }
+// Something changed that should be saved (Drive delivery status, for instance).
+function touch(session) { changed(session); }
 
 function getAllSessions() {
   return [...sessions.values()]
@@ -234,6 +238,7 @@ function serializeSession(session) {
     folder: session.folder,
     fps: session.fps,
     path: `Projects/${P.prefixFor(session.folder)}`,
+    driveFolderLink: session.driveFolderLink || null,
     takeCount: session.takeCount,
     recovered: session.recovered,
     createdAt: session.createdAt,
@@ -257,6 +262,7 @@ function toManifest(session) {
     brief: session.brief,
     folder: session.folder,
     fps: session.fps,
+    driveFolderLink: session.driveFolderLink || null,
     createdAt: session.createdAt,
     updatedAt: new Date().toISOString(),
     takeCount: session.takeCount,
@@ -278,6 +284,8 @@ function cleanupExpiredSessions(ttlMs) {
 }
 
 module.exports = {
+  allSessionObjects,
+  touch,
   setOnChange,
   createSession,
   ensureSession,

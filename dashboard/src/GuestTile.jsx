@@ -292,6 +292,11 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
                 {file.fileType === 'camera' && (file.cfr
                   ? <span className="text-emerald-400 text-[10px]">{file.fps}</span>
                   : <span className="text-amber-400 text-[10px]" title="Variable frame rate: conform before editing">VFR</span>)}
+                {file.drive && file.drive.state === 'delivered' && (
+                  <a href={file.drive.link} target="_blank" rel="noopener noreferrer" className="text-emerald-400 text-[10px] font-semibold hover:underline">In Drive</a>
+                )}
+                {file.drive && file.drive.state === 'uploading' && <span className="text-sky-400 text-[10px]">To Drive {file.drive.pct || 0}%</span>}
+                {file.drive && file.drive.state === 'retrying' && <span className="text-amber-400 text-[10px]" title={file.drive.error}>Drive: retrying</span>}
                 {file.status !== 'needs-conversion' && file.key && (
                   <a href={`/api/sessions/${sessionId}/download?key=${encodeURIComponent(file.key)}`}
                     className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/[0.06] text-gray-300 border border-white/[0.1] hover:bg-white/[0.12] transition-colors">
