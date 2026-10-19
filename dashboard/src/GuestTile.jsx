@@ -76,6 +76,7 @@ function Health({ guest }) {
   if (guest.status === 'disconnected') warnings.push(s.recording ? 'Lost connection. Their computer keeps recording and will upload when it reconnects.' : 'Lost connection.');
   else if (age > 10) warnings.push(`No update from the guest for ${age}s`);
   if (s.recording && s.micLevel < 0.01) warnings.push('Mic is silent');
+  if (/airpods|bluetooth|beats|buds|jabra|bose|sony wh|headset|hands-free/i.test(guest.activeMic || '')) warnings.push('Bluetooth mic: records at phone quality. Ask them to pick the laptop or a USB mic in the Mic menu (between takes).');
   if (s.recording && !s.cameraOff && s.brightness >= 0 && s.brightness < 0.04) warnings.push('Camera image looks black. Another app may have taken the camera, or the lens is covered.');
   if (s.recording && s.width && s.width < 1280) warnings.push(`Camera is only ${s.width}x${s.height}`);
   if (s.storageFreeMB && s.storageFreeMB < 3000) warnings.push(`Low disk space: ${(s.storageFreeMB / 1024).toFixed(1)} GB free`);
@@ -161,7 +162,12 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
         {/* Info */}
         <div className="flex-1 min-w-0">
           <div className="text-white font-semibold truncate">{guest.name}</div>
-          {guest.activeCamera && <div className="text-[11px] text-gray-500 truncate">{guest.activeCamera}</div>}
+          {(guest.activeCamera || guest.activeMic) && (
+            <div className="text-[11px] text-gray-500 leading-snug">
+              {guest.activeCamera && <div className="truncate"><span className="text-gray-600">Camera:</span> {guest.activeCamera}</div>}
+              {guest.activeMic && <div className="truncate"><span className="text-gray-600">Mic:</span> {guest.activeMic}</div>}
+            </div>
+          )}
           <div className={`text-xs ${config.text} flex items-center gap-2`}>
             <span>{config.label}</span>
             {isActive && (
