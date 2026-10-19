@@ -1,7 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const express = require('express');
-const cors = require('cors');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -10,177 +9,260 @@ const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 
-const {
-  createSession, getSession, getAllSessions,
-  addGuestToSession, removeGuestFromSession,
-  updateGuestStatus, updateGuestControls, setGuestPendingRequest,
-  addGuestFile, serializeSession, cleanupExpiredSessions, sessionCount
-} = require('./sessions');
-const { generatePresignedPutUrl, generatePresignedGetUrl } = require('./b2');
+const S = require('./sessions');
+const storage = require('./b2');
 const { downloadAndConvert } = require('./converter');
 
 const app = express();
+app.set('trust proxy', 1);
+
+// ========================================================
+// Secrets and auth
+// ========================================================
+// Guest links are signed with this secret, so they keep working after a restart.
+// Falls back to the storage key so it is stable without extra setup.
+const SECRET = process.env.SESSION_SECRET || process.env.B2_APPLICATION_KEY || 'camop-dev-secret';
+if (!process.env.SESSION_SECRET && !process.env.B2_APPLICATION_KEY) {
+  console.warn('Warning: no SESSION_SECRET or B2_APPLICATION_KEY set; using a development secret.');
+}
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
+
+function hmac(value) {
+  return crypto.createHmac('sha256', SECRET).update(value).digest('base64url');
+}
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a || ''));
+  const bb = Buffer.from(String(b || ''));
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
+const guestToken = sessionId => hmac(`guest:${sessionId}`).slice(0, 32);
+const verifyGuestToken = (sessionId, t) => typeof sessionId === 'string' && /^[a-f0-9]{6,64}$/.test(sessionId) && safeEqual(guestToken(sessionId), t);
+const AUTH_COOKIE = 'camop_auth';
+const authCookieValue = () => hmac(`producer:${DASHBOARD_PASSWORD}`);
+
+function parseCookies(header) {
+  const out = {};
+  for (const part of String(header || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+function isProducer(req) {
+  if (!DASHBOARD_PASSWORD) return true;
+  return safeEqual(parseCookies(req.headers.cookie)[AUTH_COOKIE], authCookieValue());
+}
+function requireProducer(req, res, next) {
+  if (isProducer(req)) return next();
+  res.status(401).json({ error: 'Sign in required' });
+}
 
 // ========================================================
 // Middleware
 // ========================================================
-app.set('trust proxy', 1);
-
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
-  : null;
-
-app.use(cors({
-  origin: ALLOWED_ORIGINS || true,
-  methods: ['GET', 'POST'],
-  credentials: true
-}));
-
 app.use(express.json({ limit: '1mb' }));
+app.use('/api/', rateLimit({ windowMs: 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later' }
-});
-app.use('/api/', apiLimiter);
-
-// ========================================================
-// Static files
-// ========================================================
-app.use('/guest', express.static(path.join(__dirname, '..', 'guest')));
-
-const dashboardDist = path.join(__dirname, '..', 'dashboard', 'dist');
-if (fs.existsSync(dashboardDist)) {
-  app.use(express.static(dashboardDist));
+function sanitizeString(str, maxLen) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
+}
+function safeFileName(name) {
+  return sanitizeString(name, 200).replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^\.+/, '') || 'recording';
 }
 
 // ========================================================
-// Health check
+// Static files (guest page is never cached, so a deploy can't leave a stale copy)
+// ========================================================
+app.use('/guest', express.static(path.join(__dirname, '..', 'guest'), {
+  setHeaders: res => res.setHeader('Cache-Control', 'no-store')
+}));
+const dashboardDist = path.join(__dirname, '..', 'dashboard', 'dist');
+if (fs.existsSync(dashboardDist)) app.use(express.static(dashboardDist));
+
+// ========================================================
+// Health and auth
 // ========================================================
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     uptime: Math.floor(process.uptime()),
-    sessions: sessionCount()
+    sessions: S.sessionCount(),
+    storageConfigured: Boolean(process.env.B2_BUCKET_NAME && process.env.B2_ACCOUNT_ID && process.env.B2_APPLICATION_KEY && process.env.B2_BUCKET_ENDPOINT),
+    passwordRequired: Boolean(DASHBOARD_PASSWORD)
   });
 });
 
+app.get('/api/me', (req, res) => {
+  res.json({ passwordRequired: Boolean(DASHBOARD_PASSWORD), authed: isProducer(req) });
+});
+
+app.post('/api/login', loginLimiter, (req, res) => {
+  if (!DASHBOARD_PASSWORD) return res.json({ ok: true });
+  if (!safeEqual(req.body && req.body.password, DASHBOARD_PASSWORD)) {
+    return res.status(401).json({ error: 'Wrong password' });
+  }
+  const secure = req.secure ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${AUTH_COOKIE}=${encodeURIComponent(authCookieValue())}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}${secure}`);
+  res.json({ ok: true });
+});
+
 // ========================================================
-// Input helpers
+// Sessions (producer only)
 // ========================================================
-function sanitizeString(str, maxLen) {
-  if (typeof str !== 'string') return '';
-  return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
+const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS, 10) || 200;
+
+function magicLinkFor(req, sessionId) {
+  return `${req.protocol}://${req.get('host')}/guest/?session=${sessionId}&t=${guestToken(sessionId)}`;
 }
 
-// ========================================================
-// HTTP API
-// ========================================================
-const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS, 10) || 100;
-
-app.post('/api/sessions', (req, res) => {
-  const name = sanitizeString(req.body.name, 200);
-  if (!name) {
-    return res.status(400).json({ error: 'Session name is required' });
-  }
-  if (sessionCount() >= MAX_SESSIONS) {
-    return res.status(429).json({ error: 'Maximum session limit reached' });
-  }
-  const session = createSession(name);
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
-  const magicLink = `${baseUrl}/guest/?session=${session.id}`;
-  res.json({
-    ...serializeSession(session),
-    magicLink
-  });
+app.post('/api/sessions', requireProducer, (req, res) => {
+  const name = sanitizeString(req.body && req.body.name, 200);
+  if (!name) return res.status(400).json({ error: 'Session name is required' });
+  if (S.sessionCount() >= MAX_SESSIONS) return res.status(429).json({ error: 'Maximum session limit reached' });
+  const session = S.createSession(name);
+  res.json({ ...S.serializeSession(session), magicLink: magicLinkFor(req, session.id) });
 });
 
-app.get('/api/sessions', (req, res) => {
-  res.json(getAllSessions());
+app.get('/api/sessions', requireProducer, (req, res) => {
+  res.json(S.getAllSessions().map(s => ({ ...s, magicLink: magicLinkFor(req, s.id) })));
 });
 
-app.get('/api/sessions/:id', (req, res) => {
-  const session = getSession(req.params.id);
+app.get('/api/sessions/:id', requireProducer, (req, res) => {
+  const session = S.getSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'Session not found' });
-  res.json(serializeSession(session));
+  res.json({ ...S.serializeSession(session), magicLink: magicLinkFor(req, session.id) });
 });
 
-app.post('/api/sessions/:id/upload-url', async (req, res) => {
-  const session = getSession(req.params.id);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
-
-  const fileName = sanitizeString(req.body.fileName, 500);
-  const contentType = sanitizeString(req.body.contentType, 100);
-  if (!fileName || !contentType) {
-    return res.status(400).json({ error: 'fileName and contentType are required' });
+// ========================================================
+// Uploads (guest, authorized by the signed link)
+// Each recording is one multipart upload. The guest's browser keeps the
+// uploadId and part progress on disk, so it can resume after anything.
+// ========================================================
+function guestAuth(req, res) {
+  const src = req.method === 'PUT' ? req.query : (req.body || {});
+  const { sessionId, t } = src;
+  if (!verifyGuestToken(sessionId, t)) {
+    res.status(403).json({ error: 'Invalid session link' });
+    return null;
   }
+  S.ensureSession(sessionId);
+  return src;
+}
+function keyBelongs(sessionId, key) {
+  return typeof key === 'string' && key.startsWith(`recordings/${sessionId}/`) && !key.includes('..');
+}
 
+app.post('/api/uploads/create', async (req, res) => {
+  const b = guestAuth(req, res); if (!b) return;
+  const contentType = sanitizeString(b.contentType, 100) || 'application/octet-stream';
+  const key = `recordings/${b.sessionId}/${safeFileName(b.fileName)}`;
   try {
-    const url = await generatePresignedPutUrl(fileName, contentType);
-    res.json({ url });
+    const uploadId = await storage.createMultipart(key, contentType);
+    res.json({ key, uploadId });
   } catch (err) {
-    console.error('Failed to generate presigned URL:', err);
-    res.status(500).json({ error: 'Failed to generate upload URL' });
+    console.error('createMultipart failed:', err);
+    res.status(502).json({ error: 'Storage unavailable, will retry' });
   }
 });
 
-app.post('/api/sessions/:id/convert', async (req, res) => {
-  const session = getSession(req.params.id);
+const MAX_PART_BYTES = 64 * 1024 * 1024;
+app.put('/api/uploads/part', async (req, res) => {
+  const q = guestAuth(req, res); if (!q) return;
+  const partNumber = parseInt(q.partNumber, 10);
+  const length = parseInt(req.headers['content-length'], 10);
+  if (!keyBelongs(q.sessionId, q.key) || !q.uploadId || !(partNumber >= 1 && partNumber <= 10000)) {
+    return res.status(400).json({ error: 'Bad part request' });
+  }
+  if (!(length > 0 && length <= MAX_PART_BYTES)) return res.status(411).json({ error: 'Content-Length required (max 64 MB)' });
+  try {
+    const etag = await storage.uploadPart(q.key, q.uploadId, partNumber, req, length);
+    res.json({ ok: true, etag });
+  } catch (err) {
+    console.error(`uploadPart ${partNumber} failed:`, err.name || err);
+    if (!res.headersSent) res.status(err.name === 'NoSuchUpload' ? 410 : 502).json({ error: err.name || 'Upload failed' });
+  }
+});
+
+app.post('/api/uploads/complete', async (req, res) => {
+  const b = guestAuth(req, res); if (!b) return;
+  if (!keyBelongs(b.sessionId, b.key) || !b.uploadId) return res.status(400).json({ error: 'Bad request' });
+  const expected = parseInt(b.expectedParts, 10) || 0;
+  const fileInfo = {
+    key: b.key,
+    fileName: b.key.split('/').pop(),
+    fileType: ['camera', 'screen', 'audio'].includes(b.fileType) ? b.fileType : 'camera',
+    startTs: Number(b.startTs) || null,
+    durationMs: Number(b.durationMs) || null,
+    recIndex: Number(b.recIndex) || 1
+  };
+  try {
+    let parts;
+    try {
+      parts = await storage.listAllParts(b.key, b.uploadId);
+    } catch (err) {
+      // Already completed by an earlier attempt whose response was lost.
+      if (err.name === 'NoSuchUpload') {
+        const head = await storage.headObject(b.key);
+        finishFile(b, fileInfo, head.size);
+        return res.json({ ok: true, size: head.size, alreadyComplete: true });
+      }
+      throw err;
+    }
+    const numbers = new Set(parts.map(p => p.PartNumber));
+    const missing = [];
+    for (let n = 1; n <= expected; n++) if (!numbers.has(n)) missing.push(n);
+    if (missing.length) return res.status(409).json({ error: 'Missing parts', missing });
+    if (!parts.length) return res.status(409).json({ error: 'No parts uploaded', missing: [1] });
+    await storage.completeMultipart(b.key, b.uploadId, parts);
+    const head = await storage.headObject(b.key);
+    finishFile(b, fileInfo, head.size);
+    res.json({ ok: true, size: head.size });
+  } catch (err) {
+    console.error('complete failed:', err);
+    res.status(502).json({ error: 'Storage unavailable, will retry' });
+  }
+});
+
+function finishFile(b, fileInfo, size) {
+  const guestId = sanitizeString(b.guestId, 64);
+  const needsConversion = fileInfo.fileName.endsWith('.webm');
+  S.addGuestFile(b.sessionId, guestId, { ...fileInfo, size, status: needsConversion ? 'needs-conversion' : 'complete' });
+  const session = S.getSession(b.sessionId);
+  if (session) S.addLog(session, `Saved ${fileInfo.fileName} (${(size / 1048576).toFixed(1)} MB)`);
+  broadcastSessionUpdate(b.sessionId);
+}
+
+app.post('/api/uploads/abort', async (req, res) => {
+  const b = guestAuth(req, res); if (!b) return;
+  if (!keyBelongs(b.sessionId, b.key) || !b.uploadId) return res.status(400).json({ error: 'Bad request' });
+  try { await storage.abortMultipart(b.key, b.uploadId); } catch {}
+  res.json({ ok: true });
+});
+
+// WebM (Firefox) to MP4, producer-triggered.
+app.post('/api/sessions/:id/convert', requireProducer, async (req, res) => {
+  const session = S.getSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'Session not found' });
-
-  const { guestId, fileIndex } = req.body;
-  if (!guestId) {
-    return res.status(400).json({ error: 'guestId is required' });
-  }
-
-  const guest = session.guests.get(guestId);
-  if (!guest) {
-    return res.status(400).json({ error: 'Guest not found' });
-  }
-
-  // Find the file to convert (by index or the last webm file)
-  const idx = typeof fileIndex === 'number' ? fileIndex : guest.files.findIndex(f => f.fileName.endsWith('.webm'));
+  const guest = session.guests.get(req.body.guestId);
+  if (!guest) return res.status(400).json({ error: 'Guest not found' });
+  const idx = typeof req.body.fileIndex === 'number' ? req.body.fileIndex : guest.files.findIndex(f => f.fileName.endsWith('.webm'));
   const fileEntry = guest.files[idx];
-  if (!fileEntry) {
-    return res.status(400).json({ error: 'No file to convert' });
-  }
-
+  if (!fileEntry) return res.status(400).json({ error: 'No file to convert' });
   try {
     fileEntry.status = 'converting';
     broadcastSessionUpdate(req.params.id);
-
-    const downloadUrl = await generatePresignedGetUrl(fileEntry.fileName);
-    const mp4Path = await downloadAndConvert(downloadUrl, fileEntry.fileName);
-    const mp4FileName = fileEntry.fileName.replace(/\.webm$/, '.mp4');
-
-    const uploadUrl = await generatePresignedPutUrl(mp4FileName, 'video/mp4');
-    const mp4Buffer = fs.readFileSync(mp4Path);
-
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'video/mp4' },
-      body: mp4Buffer
+    const mp4Path = await downloadAndConvert(await storage.generatePresignedGetUrl(fileEntry.key), fileEntry.fileName);
+    const mp4Key = fileEntry.key.replace(/\.webm$/, '.mp4');
+    const uploadRes = await fetch(await storage.generatePresignedPutUrl(mp4Key, 'video/mp4'), {
+      method: 'PUT', headers: { 'Content-Type': 'video/mp4' }, body: fs.readFileSync(mp4Path)
     });
-
     try { fs.unlinkSync(mp4Path); } catch {}
-
-    if (!uploadRes.ok) throw new Error(`B2 upload failed: ${uploadRes.status}`);
-
-    fileEntry.fileName = mp4FileName;
-    fileEntry.status = 'complete';
+    if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+    Object.assign(fileEntry, { key: mp4Key, fileName: mp4Key.split('/').pop(), status: 'complete' });
     broadcastSessionUpdate(req.params.id);
-
-    // Check if all files are complete
-    const allDone = guest.files.every(f => f.status === 'complete');
-    if (allDone) {
-      updateGuestStatus(req.params.id, guestId, 'done');
-      broadcastSessionUpdate(req.params.id);
-    }
-
-    res.json({ success: true, fileName: mp4FileName });
+    res.json({ success: true, fileName: fileEntry.fileName });
   } catch (err) {
     console.error('Conversion failed:', err);
     fileEntry.status = 'conversion-failed';
@@ -190,424 +272,259 @@ app.post('/api/sessions/:id/convert', async (req, res) => {
 });
 
 // ========================================================
-// Server Setup
+// Servers
 // ========================================================
-let server;
-
-// Always create HTTP server (needed for preview tools and production behind Cloudflare)
-server = http.createServer(app);
-
-// In development, also create HTTPS server for camera access
+const server = http.createServer(app);
+server.requestTimeout = 0; // long part uploads on slow connections
 let httpsServer = null;
 if (process.env.NODE_ENV === 'development') {
   const certPath = path.join(__dirname, '..', 'localhost+1.pem');
   const keyPath = path.join(__dirname, '..', 'localhost+1-key.pem');
-
   if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-    httpsServer = https.createServer({
-      cert: fs.readFileSync(certPath),
-      key: fs.readFileSync(keyPath)
-    }, app);
-    console.log('HTTPS available (mkcert) on port 3443');
-  } else {
-    console.log('Warning: No mkcert certs found. Camera access may be blocked.');
+    httpsServer = https.createServer({ cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath) }, app);
   }
 }
 
 // ========================================================
-// WebSocket Server
+// WebSockets
 // ========================================================
-const wss = new WebSocketServer({ noServer: true });
-
-// Handle WebSocket upgrades on both HTTP and HTTPS servers
+const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
 function handleUpgrade(request, socket, head) {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
-  });
+  wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request));
 }
 server.on('upgrade', handleUpgrade);
 if (httpsServer) httpsServer.on('upgrade', handleUpgrade);
 
 const wsMap = new Map(); // ws -> { sessionId, guestId, role }
 
-const VALID_GUEST_MSGS = new Set([
-  'guest-join',
-  'guest-setup-started',
-  'guest-ready',
-  'recording-started',
-  'upload-progress',
-  'upload-complete',
-  'guest:control-update',
-  'guest:request-response',
-  'guest:recording-restarted',
-  'guest:screen-share-started',
-  'guest:screen-share-stopped'
+const GUEST_MSGS = new Set([
+  'guest-join', 'guest-setup-started', 'guest-ready', 'recording-started', 'recording-stopped',
+  'guest-status', 'guest:control-update', 'guest:request-response', 'guest:recording-restarted',
+  'guest:screen-share-started', 'guest:screen-share-stopped'
 ]);
-
-const VALID_PRODUCER_MSGS = new Set([
-  'start-recording',
-  'stop-recording',
-  'producer:request',
-  'producer:cancel-request'
-]);
+const PRODUCER_MSGS = new Set(['start-recording', 'stop-recording', 'producer:request', 'producer:cancel-request']);
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const sessionId = url.searchParams.get('session');
   const role = url.searchParams.get('role');
 
-  if (!sessionId || !['guest', 'producer'].includes(role)) {
-    ws.close(4000, 'Missing or invalid parameters');
-    return;
+  if (role === 'guest') {
+    if (!verifyGuestToken(sessionId, url.searchParams.get('t'))) return ws.close(4003, 'Invalid session link');
+  } else if (role === 'producer') {
+    if (!isProducer(req)) return ws.close(4003, 'Sign in required');
+    if (!sessionId || !/^[a-f0-9]{6,64}$/.test(sessionId)) return ws.close(4000, 'Missing session');
+  } else {
+    return ws.close(4000, 'Missing or invalid parameters');
   }
 
-  const session = getSession(sessionId);
-  if (!session) {
-    ws.close(4001, 'Session not found');
-    return;
-  }
-
-  const clientId = crypto.randomBytes(4).toString('hex');
-  wsMap.set(ws, { sessionId, guestId: clientId, role });
+  const session = S.ensureSession(sessionId);
+  wsMap.set(ws, { sessionId, guestId: null, role });
 
   if (role === 'producer') {
-    ws.send(JSON.stringify({
-      type: 'session-state',
-      session: serializeSession(session)
-    }));
+    ws.send(JSON.stringify({ type: 'session-state', session: S.serializeSession(session) }));
   }
 
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
-  ws.on('message', (data) => {
-    if (data.length > 4096) return;
-
+  ws.on('message', data => {
     let msg;
-    try {
-      msg = JSON.parse(data.toString());
-    } catch {
-      return;
-    }
-
+    try { msg = JSON.parse(data.toString()); } catch { return; }
     if (!msg || typeof msg.type !== 'string') return;
-
     const info = wsMap.get(ws);
     if (!info) return;
-
-    const validTypes = info.role === 'guest' ? VALID_GUEST_MSGS : VALID_PRODUCER_MSGS;
-    if (!validTypes.has(msg.type)) return;
-
+    const allowed = info.role === 'guest' ? GUEST_MSGS : PRODUCER_MSGS;
+    if (!allowed.has(msg.type)) return;
+    if (info.role === 'guest' && msg.type !== 'guest-join' && !info.guestId) return;
     handleMessage(ws, info, msg);
   });
 
   ws.on('close', () => {
     const info = wsMap.get(ws);
-    if (info && info.role === 'guest') {
-      removeGuestFromSession(info.sessionId, info.guestId);
+    wsMap.delete(ws);
+    if (info && info.role === 'guest' && info.guestId) {
+      S.markGuestDisconnected(info.sessionId, info.guestId, ws);
       broadcastSessionUpdate(info.sessionId);
     }
-    wsMap.delete(ws);
   });
 });
 
 const pingInterval = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (!ws.isAlive) {
-      ws.terminate();
-      return;
-    }
+  wss.clients.forEach(ws => {
+    if (!ws.isAlive) return ws.terminate();
     ws.isAlive = false;
     ws.ping();
   });
-}, 30000);
+}, 20000);
+
+function sendToGuest(session, gId, payload) {
+  const guest = session.guests.get(gId);
+  if (guest && guest.ws && guest.ws.readyState === 1) guest.ws.send(JSON.stringify(payload));
+}
+function findProducerSockets(sessionId) {
+  const out = [];
+  for (const [ws, info] of wsMap) {
+    if (info.sessionId === sessionId && info.role === 'producer' && ws.readyState === 1) out.push(ws);
+  }
+  return out;
+}
 
 function handleMessage(ws, info, msg) {
-  const { sessionId, guestId, role } = info;
+  const { sessionId, role } = info;
+  const session = S.getSession(sessionId) || S.ensureSession(sessionId);
+  const guestId = info.guestId;
 
   switch (msg.type) {
     case 'guest-join': {
-      const name = sanitizeString(msg.name || 'Guest', 60);
-      addGuestToSession(sessionId, guestId, name, ws);
+      const id = sanitizeString(msg.clientId, 64).replace(/[^a-zA-Z0-9_-]/g, '') || crypto.randomBytes(8).toString('hex');
+      info.guestId = id;
+      S.addGuestToSession(sessionId, id, sanitizeString(msg.name || 'Guest', 60), ws);
+      if (msg.consentAt) S.updateGuestStatus(sessionId, id, session.guests.get(id).status, { consentAt: sanitizeString(String(msg.consentAt), 40) });
+      ws.send(JSON.stringify({ type: 'joined', guestId: id }));
       broadcastSessionUpdate(sessionId);
       break;
     }
-
-    case 'guest-setup-started': {
-      if (role !== 'guest') return;
-      updateGuestStatus(sessionId, guestId, 'setting-up');
+    case 'guest-setup-started':
+      S.updateGuestStatus(sessionId, guestId, 'setting-up');
       broadcastSessionUpdate(sessionId);
       break;
-    }
-
-    case 'guest-ready': {
-      if (role !== 'guest') return;
-      // Store the confirmed devices
-      if (msg.activeCamera) {
-        updateGuestControls(sessionId, guestId, {
-          activeCamera: msg.activeCamera,
-          activeMic: msg.activeMic
-        });
-      }
-      updateGuestStatus(sessionId, guestId, 'ready');
+    case 'guest-ready':
+      S.updateGuestControls(sessionId, guestId, { activeCamera: sanitizeString(msg.activeCamera || '', 120), activeMic: sanitizeString(msg.activeMic || '', 120) });
+      S.updateGuestStatus(sessionId, guestId, 'ready');
       broadcastSessionUpdate(sessionId);
       break;
-    }
-
-    case 'start-recording': {
-      if (role !== 'producer') return;
-      const targetGuestId = msg.guestId;
-      const session = getSession(sessionId);
-      if (!session) return;
-
-      const sendToGuest = (guest, gId) => {
-        // Only allow start if guest is ready
-        if (guest.status !== 'ready' && guest.status !== 'connected') {
-          // Send rejection back to producer
-          const producerWs = findProducerWs(sessionId);
-          if (producerWs) {
-            producerWs.send(JSON.stringify({
-              type: 'start-rejected',
-              guestId: gId,
-              reason: guest.status === 'setting-up'
-                ? 'Guest is still setting up — please wait.'
-                : `Cannot start: guest is ${guest.status}`
-            }));
-          }
-          return;
-        }
-        if (guest.ws && guest.ws.readyState === 1) {
-          guest.ws.send(JSON.stringify({ type: msg.type }));
-        }
+    case 'recording-started':
+    case 'guest:recording-restarted':
+      S.updateGuestStatus(sessionId, guestId, 'recording');
+      broadcastSessionUpdate(sessionId);
+      break;
+    case 'recording-stopped':
+      S.updateGuestStatus(sessionId, guestId, 'uploading');
+      broadcastSessionUpdate(sessionId);
+      break;
+    case 'guest-status': {
+      const num = v => (typeof v === 'number' && isFinite(v) ? v : 0);
+      const stats = {
+        recording: Boolean(msg.recording),
+        recordingMs: num(msg.recordingMs),
+        recordedBytes: num(msg.recordedBytes),
+        uploadedBytes: num(msg.uploadedBytes),
+        pendingBytes: num(msg.pendingBytes),
+        unfinished: num(msg.unfinished),
+        width: num(msg.width),
+        height: num(msg.height),
+        fps: num(msg.fps),
+        micLevel: num(msg.micLevel),
+        lastError: sanitizeString(msg.lastError || '', 200),
+        storageFreeMB: num(msg.storageFreeMB),
+        at: Date.now()
       };
-
-      if (targetGuestId === 'all') {
-        for (const [gId, guest] of session.guests) {
-          sendToGuest(guest, gId);
-        }
-      } else {
-        const guest = session.guests.get(targetGuestId);
-        if (guest) sendToGuest(guest, targetGuestId);
+      S.updateGuestStats(sessionId, guestId, stats);
+      const guest = session.guests.get(guestId);
+      if (guest) {
+        const total = stats.uploadedBytes + stats.pendingBytes;
+        const pct = total > 0 ? Math.floor((stats.uploadedBytes / total) * 100) : 100;
+        if (stats.recording) S.updateGuestStatus(sessionId, guestId, 'recording', { uploadProgress: pct });
+        else if (stats.unfinished > 0) S.updateGuestStatus(sessionId, guestId, 'uploading', { uploadProgress: pct });
+        else if (guest.status === 'uploading' || guest.status === 'recording') S.updateGuestStatus(sessionId, guestId, 'done', { uploadProgress: 100 });
       }
+      broadcastSessionUpdate(sessionId);
       break;
     }
+    case 'guest:control-update':
+      S.updateGuestControls(sessionId, guestId, {
+        muted: Boolean(msg.muted), cameraOff: Boolean(msg.cameraOff), screenSharing: Boolean(msg.screenSharing),
+        activeCamera: msg.activeCamera ? sanitizeString(msg.activeCamera, 120) : undefined,
+        activeMic: msg.activeMic ? sanitizeString(msg.activeMic, 120) : undefined
+      });
+      broadcastSessionUpdate(sessionId);
+      break;
+    case 'guest:request-response':
+      S.setGuestPendingRequest(sessionId, guestId, null);
+      broadcastSessionUpdate(sessionId);
+      break;
+    case 'guest:screen-share-started':
+    case 'guest:screen-share-stopped':
+      S.updateGuestControls(sessionId, guestId, { screenSharing: msg.type === 'guest:screen-share-started' });
+      broadcastSessionUpdate(sessionId);
+      break;
 
+    case 'start-recording':
     case 'stop-recording': {
       if (role !== 'producer') return;
-      const session2 = getSession(sessionId);
-      if (!session2) return;
-      const targetId = msg.guestId;
-
-      const sendStop = (guest) => {
-        if (guest.ws && guest.ws.readyState === 1) {
-          guest.ws.send(JSON.stringify({ type: 'stop-recording' }));
+      const targets = msg.guestId === 'all' ? [...session.guests.keys()] : [msg.guestId];
+      for (const gId of targets) {
+        const guest = session.guests.get(gId);
+        if (!guest) continue;
+        if (msg.type === 'start-recording' && !['ready', 'connected', 'done'].includes(guest.status)) {
+          for (const p of findProducerSockets(sessionId)) {
+            p.send(JSON.stringify({ type: 'start-rejected', guestId: gId, reason: guest.status === 'setting-up' ? 'Guest is still setting up.' : `Cannot start: guest is ${guest.status}` }));
+          }
+          continue;
         }
-      };
-
-      if (targetId === 'all') {
-        for (const [, guest] of session2.guests) {
-          sendStop(guest);
-        }
-      } else {
-        const guest = session2.guests.get(targetId);
-        if (guest) sendStop(guest);
+        sendToGuest(session, gId, { type: msg.type });
       }
       break;
     }
-
-    case 'recording-started': {
-      if (role !== 'guest') return;
-      updateGuestStatus(sessionId, guestId, 'recording');
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
-
-    case 'upload-progress': {
-      if (role !== 'guest') return;
-      const percent = typeof msg.percent === 'number' ? Math.min(100, Math.max(0, msg.percent)) : 0;
-      updateGuestStatus(sessionId, guestId, 'uploading', { uploadProgress: percent });
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
-
-    case 'upload-complete': {
-      if (role !== 'guest') return;
-      const fileName = sanitizeString(msg.fileName || '', 500);
-      const fileType = msg.fileType || 'camera'; // camera or screen
-      const startTs = msg.startTs || null;
-      const durationMs = msg.durationMs || null;
-      const recIndex = msg.recIndex || 1;
-      const needsConversion = fileName.endsWith('.webm');
-
-      addGuestFile(sessionId, guestId, {
-        fileName,
-        fileType,
-        startTs,
-        durationMs,
-        recIndex,
-        status: needsConversion ? 'needs-conversion' : 'complete'
-      });
-
-      // Check if all expected uploads are done
-      updateGuestStatus(sessionId, guestId, 'done', { uploadProgress: 100 });
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
-
-    case 'guest:control-update': {
-      if (role !== 'guest') return;
-      updateGuestControls(sessionId, guestId, {
-        muted: msg.muted,
-        cameraOff: msg.cameraOff,
-        screenSharing: msg.screenSharing,
-        activeCamera: msg.activeCamera,
-        activeMic: msg.activeMic
-      });
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
-
     case 'producer:request': {
       if (role !== 'producer') return;
-      const session3 = getSession(sessionId);
-      if (!session3) return;
-      const targetGuest = session3.guests.get(msg.guestId);
-      if (!targetGuest || !targetGuest.ws || targetGuest.ws.readyState !== 1) return;
-
-      setGuestPendingRequest(sessionId, msg.guestId, msg.requestType);
-      targetGuest.ws.send(JSON.stringify({
-        type: 'producer:request',
-        requestType: msg.requestType,
-        deviceId: msg.deviceId || null
-      }));
+      const guest = session.guests.get(msg.guestId);
+      if (!guest || !guest.ws || guest.ws.readyState !== 1) return;
+      const requestType = ['mute', 'cameraOff', 'deviceSwitch'].includes(msg.requestType) ? msg.requestType : null;
+      if (!requestType) return;
+      S.setGuestPendingRequest(sessionId, msg.guestId, requestType);
+      sendToGuest(session, msg.guestId, { type: 'producer:request', requestType });
       broadcastSessionUpdate(sessionId);
       break;
     }
-
-    case 'producer:cancel-request': {
+    case 'producer:cancel-request':
       if (role !== 'producer') return;
-      setGuestPendingRequest(sessionId, msg.guestId, null);
-      // Notify guest to dismiss toast
-      const session4 = getSession(sessionId);
-      if (session4) {
-        const g = session4.guests.get(msg.guestId);
-        if (g && g.ws && g.ws.readyState === 1) {
-          g.ws.send(JSON.stringify({ type: 'producer:cancel-request' }));
-        }
-      }
+      S.setGuestPendingRequest(sessionId, msg.guestId, null);
+      sendToGuest(session, msg.guestId, { type: 'producer:cancel-request' });
       broadcastSessionUpdate(sessionId);
       break;
-    }
-
-    case 'guest:request-response': {
-      if (role !== 'guest') return;
-      setGuestPendingRequest(sessionId, guestId, null);
-      // Forward response to producer
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
-
-    case 'guest:recording-restarted': {
-      if (role !== 'guest') return;
-      updateGuestStatus(sessionId, guestId, 'recording');
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
-
-    case 'guest:screen-share-started': {
-      if (role !== 'guest') return;
-      updateGuestControls(sessionId, guestId, { screenSharing: true });
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
-
-    case 'guest:screen-share-stopped': {
-      if (role !== 'guest') return;
-      updateGuestControls(sessionId, guestId, { screenSharing: false });
-      broadcastSessionUpdate(sessionId);
-      break;
-    }
   }
 }
 
-function findProducerWs(sessionId) {
-  for (const [ws, info] of wsMap) {
-    if (info.sessionId === sessionId && info.role === 'producer' && ws.readyState === 1) {
-      return ws;
-    }
-  }
-  return null;
-}
-
+// Coalesce updates: at most one broadcast per session every 400 ms.
+const pendingBroadcasts = new Map();
 function broadcastSessionUpdate(sessionId) {
-  const session = getSession(sessionId);
-  if (!session) return;
-  const payload = JSON.stringify({
-    type: 'session-state',
-    session: serializeSession(session)
-  });
-
-  for (const [ws, info] of wsMap) {
-    if (info.sessionId === sessionId && ws.readyState === 1) {
-      ws.send(payload);
-    }
-  }
+  if (pendingBroadcasts.has(sessionId)) return;
+  pendingBroadcasts.set(sessionId, setTimeout(() => {
+    pendingBroadcasts.delete(sessionId);
+    const session = S.getSession(sessionId);
+    if (!session) return;
+    const payload = JSON.stringify({ type: 'session-state', session: S.serializeSession(session) });
+    for (const ws of findProducerSockets(sessionId)) ws.send(payload);
+  }, 400));
 }
 
-// Dashboard SPA catch-all (production)
+// Dashboard SPA catch-all
 if (fs.existsSync(dashboardDist)) {
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(dashboardDist, 'index.html'));
-  });
+  app.get('*', (req, res) => res.sendFile(path.join(dashboardDist, 'index.html')));
 }
 
 // ========================================================
-// Session cleanup
+// Housekeeping and shutdown
 // ========================================================
-const SESSION_TTL_MS = parseInt(process.env.SESSION_TTL_HOURS, 10) * 3600000 || 24 * 3600000;
-const cleanupInterval = setInterval(() => {
-  cleanupExpiredSessions(SESSION_TTL_MS);
-}, 60 * 60 * 1000);
+const SESSION_TTL_MS = (parseInt(process.env.SESSION_TTL_HOURS, 10) || 72) * 3600000;
+const cleanupInterval = setInterval(() => S.cleanupExpiredSessions(SESSION_TTL_MS), 60 * 60 * 1000);
 
-// ========================================================
-// Graceful Shutdown
-// ========================================================
 function shutdown(signal) {
-  console.log(`\n${signal} received. Shutting down gracefully...`);
+  console.log(`${signal} received. Shutting down.`);
   clearInterval(pingInterval);
   clearInterval(cleanupInterval);
-  wss.clients.forEach((ws) => {
-    ws.close(1001, 'Server shutting down');
-  });
-  wss.close(() => {
-    if (httpsServer) httpsServer.close();
-    server.close(() => {
-      console.log('Server closed.');
-      process.exit(0);
-    });
-  });
-  setTimeout(() => {
-    console.error('Forced shutdown after timeout.');
-    process.exit(1);
-  }, 10000);
+  wss.clients.forEach(ws => ws.close(1012, 'Server restarting'));
+  server.close(() => process.exit(0));
+  if (httpsServer) httpsServer.close();
+  setTimeout(() => process.exit(0), 8000).unref();
 }
-
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// ========================================================
-// Start
-// ========================================================
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`CamOp server running at http://localhost:${PORT}`);
-  console.log(`Guest page: http://localhost:${PORT}/guest/`);
-});
+server.listen(PORT, () => console.log(`CamOp server running on port ${PORT}`));
+if (httpsServer) httpsServer.listen(3443, () => console.log('CamOp HTTPS on 3443'));
 
-if (httpsServer) {
-  const HTTPS_PORT = 3443;
-  httpsServer.listen(HTTPS_PORT, () => {
-    console.log(`CamOp HTTPS server running at https://localhost:${HTTPS_PORT}`);
-    console.log(`Guest page (HTTPS): https://localhost:${HTTPS_PORT}/guest/`);
-  });
-}
+module.exports = { guestToken };

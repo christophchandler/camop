@@ -4,7 +4,7 @@ import GuestTile from './GuestTile.jsx';
 export default function Session({ session, sendCommand }) {
   const [copied, setCopied] = useState(false);
 
-  const magicLink = `${location.origin}/guest/?session=${session.id}`;
+  const magicLink = session.magicLink || 'Loading link...';
 
   const copyLink = async () => {
     try {
@@ -21,7 +21,7 @@ export default function Session({ session, sendCommand }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const hasReadyGuests = session.guests.some(g => g.status === 'ready');
+  const hasReadyGuests = session.guests.some(g => g.status === 'ready' || g.status === 'done');
   const hasRecordingGuests = session.guests.some(g => g.status === 'recording');
 
   return (
@@ -83,6 +83,9 @@ export default function Session({ session, sendCommand }) {
           </button>
         </div>
         <p className="text-xs text-gray-600 mt-2 ml-1">Drop this link in your meeting chat. Guests click it to join.</p>
+        {session.recovered && (
+          <p className="text-xs text-amber-400 mt-2 ml-1">The server restarted during this session. Guests reconnect on their own and keep recording; the session name and history before the restart are not shown.</p>
+        )}
       </div>
 
       {/* Guest Tiles */}

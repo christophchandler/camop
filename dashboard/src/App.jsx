@@ -7,16 +7,31 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [needLogin, setNeedLogin] = useState(false);
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
   const reconnectDelay = useRef(1000);
 
-  useEffect(() => {
+  const loadSessions = () => {
     fetch('/api/sessions')
-      .then(r => r.json())
-      .then(data => { setSessions(data); setLoading(false); })
+      .then(r => {
+        if (r.status === 401) { setNeedLogin(true); return []; }
+        setNeedLogin(false);
+        return r.json();
+      })
+      .then(data => { setSessions(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
-  }, []);
+  };
+  useEffect(loadSessions, []);
+
+  const login = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+    if (res.ok) { setPassword(''); loadSessions(); } else setLoginError('Wrong password');
+  };
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -38,9 +53,13 @@ export default function App() {
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'session-state') {
-          setSessions(prev =>
-            prev.map(s => s.id === msg.session.id ? msg.session : s)
-          );
+          setSessions(prev => {
+            const exists = prev.some(s => s.id === msg.session.id);
+            if (!exists) return [msg.session, ...prev];
+            return prev.map(s => s.id === msg.session.id
+              ? { ...msg.session, magicLink: s.magicLink, name: msg.session.recovered ? s.name : msg.session.name }
+              : s);
+          });
         }
       };
 
@@ -73,6 +92,7 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
     });
+    if (res.status === 401) { setNeedLogin(true); return; }
     const session = await res.json();
     setSessions(prev => [session, ...prev]);
     setActiveSessionId(session.id);
@@ -85,6 +105,21 @@ export default function App() {
   }, []);
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
+
+  if (needLogin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6">
+        <form onSubmit={login} className="glass p-8 w-full max-w-sm space-y-4">
+          <h1 className="text-xl font-bold text-gradient">CamOp</h1>
+          <p className="text-sm text-gray-400">Producer sign in</p>
+          <input type="password" autoFocus value={password} onChange={e => setPassword(e.target.value)} placeholder="Dashboard password"
+            className="w-full px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white outline-none focus:border-red-500/50" />
+          {loginError && <p className="text-xs text-red-400">{loginError}</p>}
+          <button type="submit" className="btn-brand w-full py-3 rounded-xl font-semibold">Sign in</button>
+        </form>
+      </div>
+    );
+  }
 
   // Landing page when no active session
   if (!activeSession) {

@@ -12,7 +12,45 @@ const STATUS_CONFIG = {
   'conversion-failed':  { label: 'Conv. Failed',      color: 'bg-red-400',     text: 'text-red-400',     ring: 'ring-red-400/30' },
   'done':               { label: 'Done',              color: 'bg-emerald-400', text: 'text-emerald-400', ring: 'ring-emerald-400/30' },
   'complete':           { label: 'Complete',           color: 'bg-emerald-400', text: 'text-emerald-400', ring: 'ring-emerald-400/30' },
+  'disconnected':       { label: 'Disconnected',      color: 'bg-gray-400',    text: 'text-gray-400',    ring: 'ring-gray-400/30' },
 };
+
+const mb = b => (b / 1048576).toFixed(b > 100 * 1048576 ? 0 : 1);
+
+function Health({ guest }) {
+  const s = guest.stats;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const i = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(i); }, []);
+  if (!s) return null;
+  const age = Math.round((now - (s.at || 0)) / 1000);
+  const total = s.uploadedBytes + s.pendingBytes;
+  const pct = total > 0 ? Math.floor((s.uploadedBytes / total) * 100) : 100;
+  const warnings = [];
+  if (guest.status === 'disconnected') warnings.push(s.recording ? 'Lost connection. Their computer keeps recording and will upload when it reconnects.' : 'Lost connection.');
+  else if (age > 10) warnings.push(`No update from the guest for ${age}s`);
+  if (s.recording && s.micLevel < 0.01) warnings.push('Mic is silent');
+  if (s.recording && s.width && s.width < 1280) warnings.push(`Camera is only ${s.width}x${s.height}`);
+  if (s.storageFreeMB && s.storageFreeMB < 3000) warnings.push(`Low disk space: ${(s.storageFreeMB / 1024).toFixed(1)} GB free`);
+  if (s.lastError) warnings.push(s.lastError);
+  return (
+    <div className="mt-3 space-y-1.5">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-400 font-mono">
+        <span>{mb(s.recordedBytes)} MB recorded</span>
+        <span>{mb(s.uploadedBytes)} MB uploaded ({pct}%)</span>
+        {s.pendingBytes > 0 && <span>{mb(s.pendingBytes)} MB to go</span>}
+        {s.width > 0 && <span>{s.width}x{s.height} @ {Math.round(s.fps)} fps</span>}
+        <span className="flex items-center gap-1.5">mic
+          <span className="inline-block w-16 h-1.5 bg-white/[0.06] rounded-full overflow-hidden align-middle">
+            <span className="block h-full bg-emerald-400" style={{ width: `${Math.round(Math.min(1, s.micLevel * 2) * 100)}%` }} />
+          </span>
+        </span>
+      </div>
+      {warnings.map((w, i) => (
+        <div key={i} className="text-[11px] text-amber-400">{w}</div>
+      ))}
+    </div>
+  );
+}
 
 export default function GuestTile({ guest, sessionId, sendCommand }) {
   const [elapsed, setElapsed] = useState(0);
@@ -22,10 +60,11 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
 
   useEffect(() => {
     if (!isActive) { setElapsed(0); return; }
-    const start = Date.now();
+    const base = guest.stats && guest.stats.recording ? guest.stats.recordingMs + (Date.now() - guest.stats.at) : 0;
+    const start = Date.now() - base;
     const interval = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 500);
     return () => clearInterval(interval);
-  }, [guest.status]);
+  }, [guest.status, guest.stats && guest.stats.recording]);
 
   const formatTime = (secs) => {
     const h = String(Math.floor(secs / 3600)).padStart(2, '0');
@@ -46,7 +85,7 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
     }
   };
 
-  const canStart = guest.status === 'ready';
+  const canStart = guest.status === 'ready' || guest.status === 'done';
 
   return (
     <div className={`glass-hover p-5 transition-all duration-500 ${isActive ? 'border-red-500/20 shadow-lg shadow-red-500/5' : ''}`}>
@@ -126,6 +165,8 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
         </div>
       </div>
 
+      <Health guest={guest} />
+
       {/* Upload progress bar */}
       {guest.status === 'uploading' && guest.uploadProgress != null && (
         <div className="mt-3 h-1.5 bg-white/[0.04] rounded-full overflow-hidden">
@@ -159,11 +200,16 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
                 <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide ${
                   file.fileType === 'screen'
                     ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                    : 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
+                    : file.fileType === 'audio'
+                      ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                      : 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
                 }`}>
                   {file.fileType}
                 </span>
                 <span className="text-gray-500 font-mono truncate flex-1 text-[11px]">{file.fileName}</span>
+                {file.size > 0 && (
+                  <span className="text-gray-600 text-[11px]">{mb(file.size)} MB</span>
+                )}
                 {file.durationMs && (
                   <span className="text-gray-600 text-[11px]">{Math.round(file.durationMs / 1000)}s</span>
                 )}
