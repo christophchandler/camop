@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CamOp — Recording</title>
+  <title>CamOp Recording</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -507,8 +507,8 @@
 
     <div id="recording-screen">
       <video id="video-preview" autoplay muted playsinline></video>
-      <div class="info-bar info-bar-warn" id="connection-bar">&#x26A0; Connection lost — reconnecting...</div>
-      <div class="info-bar info-bar-warn" id="muted-warning">&#x26A0; You are muted — your recording will be silent. Unmute to capture audio.</div>
+      <div class="info-bar info-bar-warn" id="connection-bar">&#x26A0; Connection lost. Reconnecting; your recording continues.</div>
+      <div class="info-bar info-bar-warn" id="muted-warning">&#x26A0; You are muted, so your recording will be silent. Unmute to capture audio.</div>
       <div id="status-bar">
         <span id="status-text" class="status-msg status-waiting">Waiting for producer to start recording...</span>
       </div>
@@ -547,12 +547,12 @@
         <div class="meter-bar" id="audio-meter-bar"></div>
       </div>
       <div class="modal-error" id="setup-error" style="display:none;"></div>
-      <button class="btn btn-success" id="setup-confirm-btn" style="width:100%;">Looks Good — I'm Ready</button>
+      <button class="btn btn-success" id="setup-confirm-btn" style="width:100%;">Looks good, I'm ready</button>
     </div>
   </div>
 
   <div class="toolbar-wrapper" id="toolbar-wrapper">
-    <div class="toolbar-label">Recording Controls — These affect your recording, not your meeting</div>
+    <div class="toolbar-label">Recording controls: these affect your recording, not your meeting</div>
     <div class="toolbar">
       <button class="tb-btn" id="tb-mute" title="Mute/Unmute">
         <span class="icon" id="tb-mute-icon">&#x1F3A4;</span>
@@ -598,6 +598,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

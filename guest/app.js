@@ -347,6 +347,7 @@
         progressContainer.style.display = 'block'; progressBar.style.width = pct + '%';
       } else if (!isRecording && sessionStarted && tot.recorded > 0) {
         recoveryBar.textContent = 'All saved. You can close this tab.';
+        uploadLine.textContent = `${fmtMB(tot.recorded)} MB recorded, all uploaded`;
         recoveryBar.style.display = 'flex';
         progressBar.style.width = '100%';
         if (statusText.classList.contains('status-uploading')) setStatus('Upload complete. You can close this tab.', 'status-complete');
@@ -639,7 +640,7 @@
       storageFreeMB: free === null ? 0 : Math.round(free),
       lastError
     });
-    if (isRecording || tot.unfinished) {
+    if (isRecording || tot.unfinished || sessionStarted) {
       uploadLine.textContent = `${fmtMB(tot.recorded)} MB recorded, ${fmtMB(tot.uploaded)} MB uploaded${tot.pending > 0 ? `, ${fmtMB(tot.pending)} MB to go` : ''}`;
     }
   }
