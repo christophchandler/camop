@@ -392,6 +392,16 @@
     .toolbar-wrapper.is-recording .rec-pill { display: inline-flex; }
     .toolbar-wrapper.is-recording .idle-pill { display: none; }
     .rec-pill .badge { background: transparent; border: 0; padding: 0; color: #d4d4d8; font-size: 12px; }
+    .link-btn { background: none; border: 0; color: #fb923c; font: inherit; font-size: 13px; cursor: pointer; padding: 6px 0; text-decoration: underline; text-underline-offset: 3px; }
+    .phone-offer { margin: 6px 0 2px; }
+    #phone-panel { text-align: center; padding: 10px 0 4px; }
+    #phone-panel img { background: #fff; border-radius: 10px; padding: 6px; }
+    #phone-panel p { font-size: 12px; color: #a1a1aa; line-height: 1.45; margin-top: 8px; }
+    .phone-tips { display: none; font-size: 13px; color: #fbbf24; line-height: 1.45; margin: 10px 0 4px; }
+    .phone-mode .phone-tips { display: block; }
+    .phone-mode .phone-offer { display: none; }
+    .phone-mode #tb-screen, .phone-mode #tb-screen-label { display: none; }
+    .phone-mode #video-preview, .phone-mode #setup-preview { transform: none; }
     .speed-line { font-size: 13px; color: #a1a1aa; margin: 12px 0 4px; min-height: 18px; }
     .speed-line.ok { color: #4ade80; }
     .speed-line.warn { color: #fbbf24; }
@@ -531,6 +541,14 @@
         <div class="meter-bar" id="audio-meter-bar"></div>
       </div>
       <div class="speed-line" id="speed-line"></div>
+      <div class="phone-tips">For the best picture: prop your phone up sideways (landscape), plug it in, turn on Do Not Disturb, and keep this screen open. Your producer frames the shot from their screen. Wear headphones on your computer.</div>
+      <div class="phone-offer">
+        <button type="button" class="link-btn" id="phone-cam-btn">Webcam not great? Use your phone as the camera</button>
+        <div id="phone-panel" style="display:none;">
+          <img id="phone-qr" alt="QR code for the phone camera link" width="168" height="168">
+          <p>Point your phone's camera at this code and open the link. Your phone records the picture; keep your meeting on this computer. You can keep this window open as a backup recording.</p>
+        </div>
+      </div>
       <div class="modal-error" id="setup-error" style="display:none;"></div>
       <button class="btn btn-success" id="setup-confirm-btn" style="width:100%;">Looks good, I'm ready</button>
     </div>
@@ -595,6 +613,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

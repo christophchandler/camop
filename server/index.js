@@ -141,7 +141,7 @@ app.get('/api/sessions/:id', requireProducer, (req, res) => {
 // uploadId and part progress on disk, so it can resume after anything.
 // ========================================================
 function guestAuth(req, res) {
-  const src = req.method === 'PUT' ? req.query : (req.body || {});
+  const src = (req.method === 'PUT' || req.method === 'GET') ? req.query : (req.body || {});
   const { sessionId, t } = src;
   if (!verifyGuestToken(sessionId, t)) {
     res.status(403).json({ error: 'Invalid session link' });
@@ -179,6 +179,19 @@ app.put('/api/speedtest', (req, res) => {
 });
 
 const QUALITIES = new Set(['low', 'standard', 'high', '4k']);
+
+// QR code that opens this session's guest link in phone-camera mode.
+const QRCode = require('qrcode');
+app.get('/api/qr', async (req, res) => {
+  const q = guestAuth(req, res); if (!q) return;
+  const link = `${req.protocol}://${req.get('host')}/guest/?session=${q.sessionId}&t=${guestToken(q.sessionId)}&device=phone`;
+  try {
+    const svg = await QRCode.toString(link, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(svg);
+  } catch (e) { res.status(500).end(); }
+});
 
 // Producer thumbnails: the guest uploads a small JPEG every few seconds; the latest is kept in memory.
 const THUMB_MAX = 300 * 1024;
@@ -416,6 +429,7 @@ function handleMessage(ws, info, msg) {
       const id = sanitizeString(msg.clientId, 64).replace(/[^a-zA-Z0-9_-]/g, '') || crypto.randomBytes(8).toString('hex');
       info.guestId = id;
       S.addGuestToSession(sessionId, id, sanitizeString(msg.name || 'Guest', 60), ws);
+      session.guests.get(id).device = msg.device === 'phone' ? 'phone' : 'computer';
       if (msg.consentAt) S.updateGuestStatus(sessionId, id, session.guests.get(id).status, { consentAt: sanitizeString(String(msg.consentAt), 40) });
       ws.send(JSON.stringify({ type: 'joined', guestId: id }));
       broadcastSessionUpdate(sessionId);
@@ -454,6 +468,7 @@ function handleMessage(ws, info, msg) {
         micLevel: num(msg.micLevel),
         brightness: typeof msg.brightness === 'number' ? msg.brightness : -1,
         cameraOff: Boolean(msg.cameraOff),
+        hidden: Boolean(msg.hidden),
         lastError: sanitizeString(msg.lastError || '', 200),
         storageFreeMB: num(msg.storageFreeMB),
         at: Date.now()

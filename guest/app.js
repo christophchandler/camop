@@ -55,6 +55,10 @@
     } catch { return 'g-' + Math.random().toString(36).slice(2); }
   }
   const CLIENT_ID = sessionId ? clientId() : null;
+  // Phone-camera mode: a phone records its own camera while the meeting stays on the computer.
+  const UA = navigator.userAgent;
+  const IS_PHONE = params.get('device') === 'phone' || /iPhone|iPod|Android/.test(UA) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(UA));
+  if (IS_PHONE) document.documentElement.classList.add('phone-mode');
 
   // ========================================================
   // DOM
@@ -386,7 +390,7 @@
     echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 1 }
   });
   const VIDEO_CONSTRAINTS = id => ({
-    ...(id ? { deviceId: { exact: id } } : {}),
+    ...(id ? { deviceId: { exact: id } } : (IS_PHONE ? { facingMode: { ideal: 'environment' } } : {})),
     width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }
   });
 
@@ -398,8 +402,6 @@
     const warnings = [];
     if (/FBAN|FBAV|Instagram|LinkedInApp|Line\/|Slack|GSA\/|; wv\)/.test(ua)) {
       warnings.push('This link opened inside an app. Please open it in Safari or Chrome for recording to work.');
-    } else if (/iPhone|iPad|iPod|Android/.test(ua)) {
-      warnings.push('Please join from a laptop or desktop. Phones cannot share the camera with your meeting app.');
     }
     if (!window.MediaRecorder || !videoMime) warnings.push('This browser cannot record video. Please use Chrome, Edge or Safari.');
     if (!window.indexedDB) warnings.push('This browser cannot save the recording to disk. Please use a normal (not private) Chrome or Safari window.');
@@ -422,7 +424,18 @@
   // ========================================================
   // Startup
   // ========================================================
+  function applyPhoneCopy() {
+    if (!IS_PHONE) return;
+    const sub = document.querySelector('.modal .modal-sub');
+    if (sub) sub.textContent = 'Your phone is the camera for this session. Pick the back camera for the best quality, then confirm.';
+    const consent = document.querySelector('.consent-row');
+    if (consent) consent.lastChild.textContent = ' I agree to be recorded for this session. The recording is saved on this phone and uploaded to the producer.';
+    const ctx = $('context-line');
+    if (ctx) ctx.textContent = 'Your phone is the camera. Keep this screen open and the phone plugged in; your meeting stays on your computer.';
+  }
+
   async function boot() {
+    applyPhoneCopy();
     if (!sessionId || !token) {
       showFatal('This recording link is incomplete.', 'Please ask your producer to send the full link again.');
       return;
@@ -479,6 +492,7 @@
     recordingScreen.style.display = 'flex';
     videoPreview.srcObject = mediaStream;
     codecBadge.textContent = extFor(videoMime).toUpperCase();
+    if (IS_PHONE) holdWakeLock();
     watchTracks();
     connectWebSocket();
     openDeviceSetup();
@@ -592,6 +606,12 @@
   function rankCameras(cams) {
     const score = c => {
       const l = c.label || '';
+      if (IS_PHONE) {
+        // Main back camera first; ultra wide and telephoto next; selfie camera last.
+        if (/back|rear|environment/i.test(l) && !/ultra|tele|dual|triple|wide angle/i.test(l)) return 3;
+        if (/back|rear|environment/i.test(l)) return 2;
+        return 1;
+      }
       if (/desk view/i.test(l)) return -1;
       if (/obs|virtual|snap camera|mmhmm|screen|ndi|manycam/i.test(l)) return 0;
       if (/iphone|continuity/i.test(l)) return 3;
@@ -657,6 +677,14 @@
     meterCtx = meterAnalyser = meterRAF = null;
   }
 
+  // "Use my phone as the camera": shows a QR code for this session's phone link.
+  const phoneBtn = $('phone-cam-btn'), phonePanel = $('phone-panel'), phoneQr = $('phone-qr');
+  if (phoneBtn) phoneBtn.addEventListener('click', () => {
+    const open = phonePanel.style.display !== 'block';
+    phonePanel.style.display = open ? 'block' : 'none';
+    if (open && !phoneQr.src) phoneQr.src = `/api/qr?${new URLSearchParams({ sessionId, t: token })}`;
+  });
+
   setupConfirmBtn.addEventListener('click', () => {
     setupModal.classList.remove('active');
     startMeter(mediaStream, false);
@@ -701,7 +729,7 @@
     ws.onopen = () => {
       connectionBar.style.display = 'none';
       reconnectAttempts = 0;
-      ws.send(JSON.stringify({ type: 'guest-join', name: guestName, clientId: CLIENT_ID, consentAt }));
+      ws.send(JSON.stringify({ type: 'guest-join', name: guestName, clientId: CLIENT_ID, consentAt, device: IS_PHONE ? 'phone' : 'computer' }));
       if (isRecording) ws.send(JSON.stringify({ type: 'recording-started' }));
       else if (!setupModal.classList.contains('active')) {
         ws.send(JSON.stringify({ type: 'guest-ready', activeCamera: (cameraSelect.options[cameraSelect.selectedIndex] || {}).text, activeMic: (micSelect.options[micSelect.selectedIndex] || {}).text }));
@@ -768,6 +796,7 @@
       width: s.width || 0, height: s.height || 0, fps: s.frameRate || 0,
       micLevel: Math.round(micLevel * 100) / 100,
       brightness: Math.round(brightness * 100) / 100,
+      hidden: document.visibilityState === 'hidden',
       cameraOff: isCameraOff,
       storageFreeMB: free === null ? 0 : Math.round(free),
       lastError
@@ -828,7 +857,7 @@
       return;
     }
     if (isMuted) mutedWarning.style.display = 'flex';
-    setStatus('Recording. Your video is being saved to this computer and uploaded as you go.', 'status-recording');
+    setStatus(`Recording. Your video is being saved to this ${IS_PHONE ? 'phone' : 'computer'} and uploaded as you go.`, 'status-recording');
     toolbarWrapper.classList.add('is-recording');
     recoveryBar.style.display = 'none'; progressContainer.style.display = 'none';
     startTimer();
@@ -871,7 +900,10 @@
     try { if ('wakeLock' in navigator && document.visibilityState === 'visible') wakeLock = await navigator.wakeLock.request('screen'); } catch {}
   }
   function releaseWakeLock() { try { if (wakeLock) wakeLock.release(); } catch {} wakeLock = null; }
-  document.addEventListener('visibilitychange', () => { if (isRecording && document.visibilityState === 'visible') holdWakeLock(); });
+  document.addEventListener('visibilitychange', () => {
+    if ((isRecording || (IS_PHONE && guestName)) && document.visibilityState === 'visible') holdWakeLock();
+    sendStatus();
+  });
 
   // ========================================================
   // Toolbar

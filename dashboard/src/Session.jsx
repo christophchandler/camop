@@ -82,7 +82,7 @@ export default function Session({ session, sendCommand }) {
             )}
           </button>
         </div>
-        <p className="text-xs text-gray-600 mt-2 ml-1">Drop this link in your meeting chat. Guests click it to join.</p>
+        <p className="text-xs text-gray-600 mt-2 ml-1">Drop this link in your meeting chat. Guests click it to join. To use a guest's phone as the camera, text them the same link, or they can scan the QR code on their setup screen.</p>
         {session.recovered && (
           <p className="text-xs text-amber-400 mt-2 ml-1">The server restarted during this session. Guests reconnect on their own and keep recording; the session name and history before the restart are not shown.</p>
         )}

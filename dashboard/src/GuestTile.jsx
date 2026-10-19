@@ -75,6 +75,8 @@ function Health({ guest }) {
   const warnings = [];
   if (guest.status === 'disconnected') warnings.push(s.recording ? 'Lost connection. Their computer keeps recording and will upload when it reconnects.' : 'Lost connection.');
   else if (age > 10) warnings.push(`No update from the guest for ${age}s`);
+  if (s.hidden && guest.device === 'phone') warnings.push('Their phone left the CamOp screen. Phones pause the camera until the screen is back.');
+  else if (s.hidden && s.recording) warnings.push('The CamOp tab is in the background (that is fine on a computer).');
   if (s.recording && s.micLevel < 0.01) warnings.push('Mic is silent');
   if (s.recording && !s.cameraOff && s.brightness >= 0 && s.brightness < 0.04) warnings.push('Camera image looks black. Another app may have taken the camera, or the lens is covered.');
   if (s.recording && s.width && s.width < 1280) warnings.push(`Camera is only ${s.width}x${s.height}`);
@@ -160,7 +162,10 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <div className="text-white font-semibold truncate">{guest.name}</div>
+          <div className="text-white font-semibold truncate flex items-center gap-2">
+            {guest.name}
+            {guest.device === 'phone' && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide bg-sky-500/10 text-sky-400 border border-sky-500/20">PHONE</span>}
+          </div>
           {guest.activeCamera && <div className="text-[11px] text-gray-500 truncate">{guest.activeCamera}</div>}
           <div className={`text-xs ${config.text} flex items-center gap-2`}>
             <span>{config.label}</span>

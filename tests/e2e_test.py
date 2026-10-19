@@ -155,11 +155,32 @@ def main():
         check('Stored size matches recorded size (all takes)', all(r['completeSize'] == r['totalBytes'] for r in recs))
         wait_for(lambda: 'All saved' in guest.inner_text('#recovery-bar'), 15, what='All saved message')
         check('Guest sees "All saved"', True)
+
+        # Take 3: a phone joins as the camera (iPhone emulation), records, uploads
+        phone = browser.new_context(**p.devices['iPhone 13'], permissions=['camera', 'microphone']).new_page()
+        phone.goto(link + '&device=phone&partmb=5')
+        phone.fill('#name-input', 'Test Guest'); phone.check('#consent-input'); phone.click('#join-btn')
+        phone.wait_for_selector('#setup-modal.active', timeout=15000)
+        phone.click('#setup-confirm-btn')
+        wait_for(lambda: prod.locator('text=PHONE').count() > 0, 20, what='phone tile')
+        check('Phone shows up on the dashboard as its own tile', True)
+        phone_tile = prod.locator('div.glass-hover', has=prod.locator('text=PHONE'))
+        wait_for(lambda: phone_tile.locator('button:has-text("Start Recording"):not([disabled])').count() > 0, 20, what='phone Start')
+        phone_tile.locator('button:has-text("Start Recording")').first.click()
+        wait_for(lambda: phone.evaluate('window.__camop.isRecording()'), 15, what='phone recording')
+        time.sleep(12)
+        phone_tile.locator('button:has-text("Stop")').first.click()
+        precs = wait_for(lambda: (lambda r: r if r and all(x['state'] == 'done' for x in r) else None)(
+            phone.evaluate('window.__camop.allRecs()')), 120, step=1, what='phone take finished')
+        check('Phone take uploaded with matching size', all(r['completeSize'] == r['totalBytes'] for r in precs),
+              ', '.join(f"{r['fileType']} {r['completeSize']} B" for r in precs))
+        thumbs = prod.locator('img[alt$="camera"]').count()
+        check('Producer thumbnails showing', thumbs >= 1, f'{thumbs} thumbnails')
         browser.close()
 
     # Verify every stored object is a playable media file
     objs = s3.list_objects_v2(Bucket=BUCKET).get('Contents', [])
-    check('Files in storage', len(objs) >= 4, ', '.join(o['Key'].split('/')[-1] for o in objs))
+    check('Files in storage', len(objs) >= 6, ', '.join(o['Key'].split('/')[-1] for o in objs))
     for o in objs:
         path = os.path.join(tmp, o['Key'].split('/')[-1])
         s3.download_file(BUCKET, o['Key'], path)

@@ -165,6 +165,7 @@ function serializeSession(session) {
       stats: guest.stats,
       speed: guest.speed,
       thumbAt: guest.thumbAt || null,
+      device: guest.device || 'computer',
       quality: guest.quality,
       lastSeen: guest.lastSeen
     });
