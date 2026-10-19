@@ -256,7 +256,10 @@
     if (rec.state === 'done') return false;
     if (!rec.uploadId) {
       if (rec.state === 'finalizing' && rec.chunkCount === 0) { await patchRec(rec.id, r => { r.state = 'done'; }); return true; }
-      const r = await api('/api/uploads/create', { sessionId: rec.sessionId, t: rec.t, fileName: rec.fileName, contentType: rec.mime });
+      const r = await api('/api/uploads/create', {
+        sessionId: rec.sessionId, t: rec.t, fileName: rec.fileName, contentType: rec.mime,
+        guestId: rec.guestId, guestName, fileType: rec.fileType, startTs: rec.startTs, recIndex: rec.recIndex
+      });
       if (!r.ok) throw Object.assign(new Error(r.data.error || `Create failed (${r.status})`), { status: r.status });
       rec = await patchRec(rec.id, x => { x.key = r.data.key; x.uploadId = r.data.uploadId; x.partEnds = []; x.uploadedBytes = 0; });
     }
@@ -779,7 +782,7 @@
 
   function handleServerMessage(msg) {
     switch (msg.type) {
-      case 'start-recording': startRecording(msg.quality); break;
+      case 'start-recording': startRecording(msg.quality, msg.take); break;
       case 'stop-recording': stopRecording(true); break;
       case 'producer:request': enqueueRequest(msg); break;
       case 'producer:cancel-request': dismissCurrentToast(); break;
@@ -790,7 +793,7 @@
   // Recording
   // ========================================================
   let starting = false, currentQuality = 'standard';
-  async function startRecording(quality) {
+  async function startRecording(quality, take) {
     if (isRecording || starting) return;
     if (!videoMime) { setStatus('This browser cannot record video. Please use Chrome, Edge or Safari.', 'status-error'); return; }
     starting = true;
@@ -804,14 +807,16 @@
         try { await vt.applyConstraints({ width: { ideal: q.w }, height: { ideal: q.h }, frameRate: { ideal: 30 } }); }
         catch (e) { noteError(`Camera could not switch to ${q.label}: ${e.message}`); }
       }
-      await startTakes(q);
+      await startTakes(q, take);
     } finally { starting = false; }
   }
 
-  async function startTakes(q) {
+  async function startTakes(q, take) {
     isRecording = true; sessionStarted = true;
     recordingStartTime = Date.now();
-    const idx = recIndex++;
+    // The server numbers takes per session so every guest's files share a take number.
+    const idx = take > 0 ? take : recIndex;
+    recIndex = idx + 1;
     try {
       const cam = new TrackRecorder(mediaStream, { fileType: 'camera', mime: videoMime, videoBps: q.bps, audioBps: 192000, recIndex: idx });
       tracks = [await cam.start()];
@@ -854,6 +859,7 @@
     kickUploader();
     updateRecoveryBar();
     sendStatus();
+    if (switchAfterTake) { switchAfterTake = false; setTimeout(() => tbCamSwitch.click(), 300); }
   }
   stopBtn.addEventListener('click', () => stopRecording(true));
 
@@ -973,18 +979,20 @@
   // ========================================================
   // Producer request toasts
   // ========================================================
+  // Switching cameras mid-take would break the file, so during a take the guest
+  // still sees the request, and "OK" opens the camera menu as soon as the take stops.
+  let switchAfterTake = false;
   function enqueueRequest(msg) {
-    if (msg.requestType === 'deviceSwitch' && isRecording) {
-      sendWs({ type: 'guest:request-response', requestType: msg.requestType, response: 'dismissed' });
-      return;
-    }
     requestQueue.push(msg); if (!currentRequest) showNextToast();
   }
   function showNextToast() {
     if (!requestQueue.length) { currentRequest = null; toastContainer.classList.remove('show'); return; }
     currentRequest = requestQueue.shift();
     const text = { mute: 'Your producer is asking you to mute your mic', cameraOff: 'Your producer is asking you to turn off your camera', deviceSwitch: 'Your producer is asking you to switch your camera' };
-    toastText.textContent = text[currentRequest.requestType] || 'Your producer has a request';
+    const duringTake = currentRequest.requestType === 'deviceSwitch' && isRecording;
+    toastText.textContent = (text[currentRequest.requestType] || 'Your producer has a request')
+      + (duringTake ? '. You can change it as soon as this take stops.' : '');
+    toastApprove.textContent = duringTake ? 'OK' : 'Approve';
     toastContainer.classList.add('show');
   }
   toastApprove.addEventListener('click', () => {
@@ -992,7 +1000,7 @@
     const rt = currentRequest.requestType;
     if (rt === 'mute' && !isMuted) { isMuted = true; applyMuteState(); }
     else if (rt === 'cameraOff' && !isCameraOff) { isCameraOff = true; applyVideoState(); }
-    else if (rt === 'deviceSwitch') tbCamSwitch.click();
+    else if (rt === 'deviceSwitch') { if (isRecording) switchAfterTake = true; else tbCamSwitch.click(); }
     sendWs({ type: 'guest:request-response', requestType: rt, response: 'approved' });
     broadcastControlState(); dismissCurrentToast();
   });

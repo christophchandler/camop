@@ -7,7 +7,8 @@ const {
   UploadPartCommand,
   ListPartsCommand,
   CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand
+  AbortMultipartUploadCommand,
+  ListObjectsV2Command
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
@@ -101,7 +102,35 @@ async function headObject(key) {
   return { size: res.ContentLength };
 }
 
+// Small JSON documents (the session manifest) are written whole.
+async function putText(key, text, contentType = 'application/json') {
+  await getClient().send(new PutObjectCommand({
+    Bucket: BUCKET(), Key: key, Body: text, ContentType: contentType, ContentLength: Buffer.byteLength(text)
+  }));
+}
+
+async function getText(key) {
+  const res = await getClient().send(new GetObjectCommand({ Bucket: BUCKET(), Key: key }));
+  return res.Body.transformToString();
+}
+
+// Every key in the bucket (with its last-modified time), a page of 1000 at a time.
+async function listKeys(maxPages = 100) {
+  const out = [];
+  let token;
+  for (let page = 0; page < maxPages; page++) {
+    const res = await getClient().send(new ListObjectsV2Command({ Bucket: BUCKET(), ContinuationToken: token }));
+    for (const o of res.Contents || []) out.push({ key: o.Key, modified: o.LastModified, size: o.Size });
+    if (!res.IsTruncated) break;
+    token = res.NextContinuationToken;
+  }
+  return out;
+}
+
 module.exports = {
+  putText,
+  getText,
+  listKeys,
   generatePresignedPutUrl,
   generatePresignedGetUrl,
   createMultipart,

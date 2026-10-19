@@ -10,7 +10,9 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 
 const S = require('./sessions');
+const P = require('./project');
 const storage = require('./b2');
+const persist = require('./persist');
 const { downloadAndConvert } = require('./converter');
 
 const app = express();
@@ -81,6 +83,8 @@ app.use('/guest', express.static(path.join(__dirname, '..', 'guest'), {
 const dashboardDist = path.join(__dirname, '..', 'dashboard', 'dist');
 if (fs.existsSync(dashboardDist)) app.use(express.static(dashboardDist));
 
+const STORAGE_CONFIGURED = Boolean(process.env.B2_BUCKET_NAME && process.env.B2_ACCOUNT_ID && process.env.B2_APPLICATION_KEY && process.env.B2_BUCKET_ENDPOINT);
+
 // ========================================================
 // Health and auth
 // ========================================================
@@ -89,7 +93,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     uptime: Math.floor(process.uptime()),
     sessions: S.sessionCount(),
-    storageConfigured: Boolean(process.env.B2_BUCKET_NAME && process.env.B2_ACCOUNT_ID && process.env.B2_APPLICATION_KEY && process.env.B2_BUCKET_ENDPOINT),
+    storageConfigured: STORAGE_CONFIGURED,
     passwordRequired: Boolean(DASHBOARD_PASSWORD)
   });
 });
@@ -117,11 +121,20 @@ function magicLinkFor(req, sessionId) {
   return `${req.protocol}://${req.get('host')}/guest/?session=${sessionId}&t=${guestToken(sessionId)}`;
 }
 
+// A session belongs to a project folder: "261019_Client_Project", or an existing
+// folder name the producer pastes in to add recordings to a project already on the server.
 app.post('/api/sessions', requireProducer, (req, res) => {
-  const name = sanitizeString(req.body && req.body.name, 200);
-  if (!name) return res.status(400).json({ error: 'Session name is required' });
+  const b = req.body || {};
+  const client = sanitizeString(b.client, 80);
+  const project = sanitizeString(b.project, 80);
+  const folder = P.cleanFolder(sanitizeString(b.folder, 160));
+  const name = sanitizeString(b.name, 200) || [client, project].filter(Boolean).join(' ') || folder;
+  if (!client && !folder && !name) return res.status(400).json({ error: 'Client name is required' });
   if (S.sessionCount() >= MAX_SESSIONS) return res.status(429).json({ error: 'Maximum session limit reached' });
-  const session = S.createSession(name);
+  const session = S.createSession({
+    name, client: client || (!folder ? name : ''), project, folder,
+    brief: sanitizeString(b.brief, 2000)
+  });
   res.json({ ...S.serializeSession(session), magicLink: magicLinkFor(req, session.id) });
 });
 
@@ -150,14 +163,32 @@ function guestAuth(req, res) {
   S.ensureSession(sessionId);
   return src;
 }
+// A key is the session's CAMOP folder plus a plain file name. Keys from before
+// project folders ("recordings/<id>/...") and the unsorted fallback still resume.
 function keyBelongs(sessionId, key) {
-  return typeof key === 'string' && key.startsWith(`recordings/${sessionId}/`) && !key.includes('..');
+  if (typeof key !== 'string' || key.includes('..')) return false;
+  const inside = prefix => key.startsWith(prefix) && key.length > prefix.length && !key.slice(prefix.length).includes('/');
+  const session = S.getSession(sessionId);
+  if (session && inside(P.prefixFor(session.folder))) return true;
+  if (inside(`recordings/${sessionId}/`)) return true;
+  const m = /^(_CamOp_Unsorted\/\d{6}_([0-9a-f]{8}))\//.exec(key);
+  return Boolean(m && m[2] === sessionId.slice(0, 8) && inside(P.prefixFor(m[1])));
 }
 
 app.post('/api/uploads/create', async (req, res) => {
   const b = guestAuth(req, res); if (!b) return;
   const contentType = sanitizeString(b.contentType, 100) || 'application/octet-stream';
-  const key = `recordings/${b.sessionId}/${safeFileName(b.fileName)}`;
+  const session = S.getSession(b.sessionId);
+  const legacy = P.parseLegacyName(b.fileName);
+  const guest = session.guests.get(sanitizeString(b.guestId, 64));
+  const fileName = P.recordingName({
+    startTs: Number(b.startTs) || legacy.startTs,
+    guestName: (guest && guest.name) || sanitizeString(b.guestName, 60),
+    fileType: ['camera', 'audio', 'screen'].includes(b.fileType) ? b.fileType : legacy.fileType,
+    take: Number(b.recIndex) || legacy.take,
+    ext: (/\.([a-z0-9]{2,5})$/i.exec(safeFileName(b.fileName)) || [])[1] || legacy.ext
+  });
+  const key = P.prefixFor(session.folder) + fileName;
   try {
     const uploadId = await storage.createMultipart(key, contentType);
     res.json({ key, uploadId });
@@ -515,6 +546,7 @@ function handleMessage(ws, info, msg) {
     case 'stop-recording': {
       if (role !== 'producer') return;
       const targets = msg.guestId === 'all' ? [...session.guests.keys()] : [msg.guestId];
+      let take = null;
       for (const gId of targets) {
         const guest = session.guests.get(gId);
         if (!guest) continue;
@@ -527,7 +559,9 @@ function handleMessage(ws, info, msg) {
         const quality = QUALITIES.has(msg.quality) && msg.guestId !== 'all' ? msg.quality
           : (guest.quality || (guest.speed && guest.speed.recommended) || 'standard');
         if (msg.type === 'start-recording' && msg.guestId !== 'all' && QUALITIES.has(msg.quality)) guest.quality = msg.quality;
-        sendToGuest(session, gId, msg.type === 'start-recording' ? { type: msg.type, quality } : { type: msg.type });
+        // One take number per Start press, shared by every guest it starts, so files line up.
+        if (msg.type === 'start-recording' && take === null) take = S.nextTake(session);
+        sendToGuest(session, gId, msg.type === 'start-recording' ? { type: msg.type, quality, take } : { type: msg.type });
       }
       break;
     }
@@ -575,20 +609,38 @@ if (fs.existsSync(dashboardDist)) {
 const SESSION_TTL_MS = (parseInt(process.env.SESSION_TTL_HOURS, 10) || 72) * 3600000;
 const cleanupInterval = setInterval(() => S.cleanupExpiredSessions(SESSION_TTL_MS), 60 * 60 * 1000);
 
-function shutdown(signal) {
+async function shutdown(signal) {
   console.log(`${signal} received. Shutting down.`);
+  setTimeout(() => process.exit(0), 8000).unref();
+  await persist.flush().catch(() => {});
   clearInterval(pingInterval);
   clearInterval(cleanupInterval);
   wss.clients.forEach(ws => ws.close(1012, 'Server restarting'));
   server.close(() => process.exit(0));
   if (httpsServer) httpsServer.close();
-  setTimeout(() => process.exit(0), 8000).unref();
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`CamOp server running on port ${PORT}`));
-if (httpsServer) httpsServer.listen(3443, () => console.log('CamOp HTTPS on 3443'));
+// Restore recent sessions before taking connections, so a guest reconnecting after a
+// restart lands in its real session. If storage is slow, start anyway after 10 s.
+async function boot() {
+  if (STORAGE_CONFIGURED) {
+    try {
+      const n = await Promise.race([
+        persist.loadRecent(SESSION_TTL_MS),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), 10000))
+      ]);
+      console.log(`Restored ${n} session(s) from storage`);
+    } catch (err) {
+      console.error('Restoring sessions failed:', err.name || err.message);
+    }
+    persist.start();
+  }
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => console.log(`CamOp server running on port ${PORT}`));
+  if (httpsServer) httpsServer.listen(3443, () => console.log('CamOp HTTPS on 3443'));
+}
+boot();
 
 module.exports = { guestToken };
