@@ -36,6 +36,9 @@ ENV = dict(os.environ,
            B2_BUCKET_NAME=BUCKET, DASHBOARD_PASSWORD=PASSWORD, PORT=str(APP_PORT), NODE_ENV='test')
 
 results = []
+# CFR=vp9 runs the guest's constant-frame-rate recorder (VP9 + Opus here, since this
+# Chromium has no H.264/AAC encoder); unset, the camera file comes from MediaRecorder.
+CFR = os.environ.get('CFR', '')
 from zoneinfo import ZoneInfo
 FOLDER = datetime.datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%y%m%d') + '_BonsaiRobotics_ExecInterviews'
 
@@ -103,7 +106,7 @@ def main():
             headers={'Content-Type': 'application/json'})).status) or 403
         check('Forged guest link is refused', status == 403)
 
-        guest_url = link + '&partmb=5'
+        guest_url = link + '&partmb=5' + (f'&cfr={CFR}&testres=640x360' if CFR else '&cfr=0')
 
         def join():
             guest.goto(guest_url)
@@ -129,7 +132,8 @@ def main():
         # Take 1: upload during recording, then a reload mid-take
         join()
         start_take()
-        t = wait_for(lambda: (lambda x: x if x['uploaded'] > 0 else None)(totals()), 90, step=1, what='first part upload')
+        # VP9 on the fake camera's simple picture runs ~1 Mbps, so a 5 MB part takes longer to fill.
+        t = wait_for(lambda: (lambda x: x if x['uploaded'] > 0 else None)(totals()), 240 if CFR else 90, step=1, what='first part upload')
         check('Parts upload while still recording', guest.evaluate('window.__camop.isRecording()') and t['uploaded'] > 0,
               f"{t['uploaded'] / 1048576:.1f} MB uploaded of {t['recorded'] / 1048576:.1f} MB recorded")
         time.sleep(3)
@@ -202,6 +206,16 @@ def main():
     check('Session manifest saved next to the files and lists them', len(manifests) == 1 and doc.get('folder') == FOLDER
           and set(names) <= listed and doc.get('client') == 'bonsai robotics', manifests[0]['Key'].split('/')[-1] if manifests else 'none')
     check('Manifest holds no guest link token', 't=' not in json.dumps(doc) and '"t"' not in json.dumps(doc))
+    # Camera and audio-only files of the same take should be about the same length
+    durs = {}
+    for o in media:
+        pth = os.path.join(tmp, 'len_' + o['Key'].split('/')[-1]); s3.download_file(BUCKET, o['Key'], pth)
+        d = float(json.loads(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', pth], capture_output=True, text=True).stdout or '{}').get('format', {}).get('duration') or 0)
+        m = name_re.match(o['Key'].split('/')[-1])
+        if m: durs.setdefault(m.group(2), {})[m.group(1)] = d
+    for take, d in sorted(durs.items()):
+        if 'CAM' in d and 'AUDIO' in d:
+            check(f'Take {take}: camera and audio files the same length (within 6 s)', abs(d['CAM'] - d['AUDIO']) < 6, f"camera {d['CAM']:.1f}s, audio {d['AUDIO']:.1f}s")
     for o in media:
         path = os.path.join(tmp, o['Key'].split('/')[-1])
         s3.download_file(BUCKET, o['Key'], path)
@@ -212,6 +226,15 @@ def main():
         kinds = sorted(s['codec_type'] for s in probe.get('streams', []))
         dur = probe.get('format', {}).get('duration')
         expect = ['audio'] if '_AUDIO_' in path else ['audio', 'video']
+        if CFR and '_CAM_' in path:
+            v = next((s_ for s_ in json.loads(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type,avg_frame_rate,r_frame_rate',
+                      '-of', 'json', path], capture_output=True, text=True).stdout or '{}').get('streams', []) if s_.get('codec_type') == 'video'), {})
+            pts = sorted(int(x) for x in subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'packet=pts', '-of', 'csv=p=0', path],
+                         capture_output=True, text=True).stdout.split() if x.strip().lstrip('-').isdigit())
+            off = [b - a for a, b in zip(pts, pts[1:]) if b - a != 1001]
+            # The fake camera runs at 20 fps, so CamOp picks the 23.976 grid for it.
+            check(f"Constant frame rate: {os.path.basename(path)}", v.get('avg_frame_rate') in ('30000/1001', '24000/1001') and not off and len(pts) > 30,
+                  f"avg={v.get('avg_frame_rate')} frames={len(pts)} off-grid={len(off)}")
         # Duplicate timestamps from MediaRecorder under CPU load are a muxer warning, not lost data.
         decode_errors = [l for l in dec.stderr.splitlines() if l.strip() and 'non monotonically increasing dts' not in l]
         check(f"Decodes cleanly: {os.path.basename(path)}", kinds == expect and not decode_errors,

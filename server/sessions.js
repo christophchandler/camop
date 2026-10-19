@@ -26,6 +26,7 @@ function newSession(id, meta, recovered = false) {
     project: meta.project || '',
     brief: meta.brief || '',
     folder: meta.folder || P.folderFor({ ...meta, createdAt }),
+    fps: meta.fps === '23.976' ? '23.976' : '29.97', // the constant frame rate guests record at
     takeCount: meta.takeCount || 0,
     recovered,
     createdAt,
@@ -58,7 +59,7 @@ function restoreSession(doc) {
   if (!doc || typeof doc.sessionId !== 'string' || sessions.has(doc.sessionId)) return null;
   const session = newSession(doc.sessionId, {
     name: doc.name, client: doc.client, project: doc.project, brief: doc.brief,
-    folder: doc.folder, createdAt: doc.createdAt, takeCount: doc.takeCount
+    folder: doc.folder, createdAt: doc.createdAt, takeCount: doc.takeCount, fps: doc.fps
   });
   session.log = Array.isArray(doc.log) ? doc.log.slice(-200) : [];
   for (const g of doc.guests || []) {
@@ -231,6 +232,7 @@ function serializeSession(session) {
     project: session.project,
     brief: session.brief,
     folder: session.folder,
+    fps: session.fps,
     path: `Projects/${P.prefixFor(session.folder)}`,
     takeCount: session.takeCount,
     recovered: session.recovered,
@@ -254,6 +256,7 @@ function toManifest(session) {
     project: session.project,
     brief: session.brief,
     folder: session.folder,
+    fps: session.fps,
     createdAt: session.createdAt,
     updatedAt: new Date().toISOString(),
     takeCount: session.takeCount,

@@ -22,6 +22,10 @@
   // 8 MB parts; tests can lower it (storage requires at least 5 MB for every part but the last).
   const PART_SIZE = Math.max(5, Number(params.get('partmb')) || 8) * 1024 * 1024;
   const CHUNK_MS = 2000;
+  // Constant-frame-rate recording (cfr.js) in Chromium browsers that can encode H.264 + AAC.
+  // ?cfr=0 turns it off; ?cfr=vp9 runs the same path with VP9 + Opus (test browsers only).
+  const CFR_PARAM = params.get('cfr');
+  const CFR_ON = CFR_PARAM !== '0' && !!window.CamOpCFR && (CamOpCFR.isChromium() || CFR_PARAM === 'vp9');
   const VIDEO_BPS = 6_000_000; // screen share and fallback
   // Quality tiers. 'needMbps' is the upload speed that keeps up live, with ~30% headroom.
   const QUALITY = {
@@ -206,6 +210,68 @@
     return `${date}_${safeName}_${type}_${startTs}_rec${idx}.${ext}`;
   }
 
+  // Same job as TrackRecorder, but the camera file comes out at an exact 29.97 or 23.976
+  // frames a second (see cfr.js). Returns null from start() when this browser can't, so
+  // the caller uses TrackRecorder instead.
+  class CfrTrackRecorder {
+    constructor(stream, { fps, videoBps, audioBps, recIndex }) {
+      this.stream = stream; this.fps = fps; this.videoBps = videoBps; this.audioBps = audioBps; this.recIndex = recIndex;
+      this.writeChain = Promise.resolve(); this.seq = 0; this.bytes = 0; this.onFallback = null;
+    }
+    async start() {
+      const vp9 = CFR_PARAM === 'vp9';
+      this.cfr = new CamOpCFR.CfrRecorder(this.stream, {
+        fps: this.fps, videoBps: this.videoBps, audioBps: this.audioBps,
+        kind: vp9 ? 'vp9' : 'avc', audioKind: vp9 ? 'opus' : 'aac', benchmark: params.get('cfrbench') !== '0',
+        onData: d => this.write(d), onError: e => this.failed(e)
+      });
+      let ok = false;
+      try { ok = await this.cfr.prepare(); } catch (e) { noteError(`Constant frame rate unavailable: ${e.message}`); }
+      if (!ok) return null;
+      const startTs = Date.now();
+      this.rec = {
+        id: `${sessionId}_${CLIENT_ID}_camera_${startTs}`,
+        sessionId, t: token, guestId: CLIENT_ID,
+        fileName: buildFileName('camera', startTs, this.recIndex, 'mp4'),
+        mime: 'video/mp4', fileType: 'camera', recIndex: this.recIndex, fps: this.fps, cfr: true,
+        startTs, endTs: null, state: 'recording',
+        chunkCount: 0, totalBytes: 0,
+        key: null, uploadId: null, partEnds: [], uploadedBytes: 0, completeSize: null,
+        createdAt: startTs
+      };
+      lockedRecs.add(this.rec.id);
+      await putRec(this.rec);
+      this.cfr.start();
+      return this;
+    }
+    write(data) {
+      const seq = this.seq++;
+      const blob = new Blob([data]);
+      this.bytes += data.byteLength;
+      this.writeChain = this.writeChain.then(async () => {
+        await appendChunk(this.rec.id, seq, blob);
+        kickUploader();
+      }).catch(err => noteError(`Disk write failed: ${err.message || err}`));
+    }
+    failed(err) {
+      noteError(`Constant-frame-rate recorder stopped (${err && err.message || err}); continuing with the standard recorder`);
+      if (this.onFallback) this.onFallback(this);
+    }
+    stats() { return this.cfr ? this.cfr.stats() : null; }
+    stop() {
+      if (!this.stopping) {
+        this.stopping = (async () => {
+          let stats = null;
+          try { stats = await this.cfr.stop(); } catch (e) { noteError(e); }
+          await this.writeChain;
+          await patchRec(this.rec.id, r => { r.state = 'finalizing'; r.endTs = Date.now(); r.cfrStats = stats; }).catch(e => noteError(e));
+          kickUploader();
+        })();
+      }
+      return this.stopping;
+    }
+  }
+
   // ========================================================
   // Uploader: disk -> 8 MB parts -> server -> storage
   // ========================================================
@@ -284,7 +350,8 @@
       const r = await api('/api/uploads/complete', {
         sessionId: rec.sessionId, t: rec.t, guestId: rec.guestId, key: rec.key, uploadId: rec.uploadId,
         expectedParts: rec.partEnds.length, fileType: rec.fileType, startTs: rec.startTs,
-        durationMs: (rec.endTs || Date.now()) - rec.startTs, recIndex: rec.recIndex
+        durationMs: (rec.endTs || Date.now()) - rec.startTs, recIndex: rec.recIndex,
+        fps: rec.fps || null, cfr: !!rec.cfr
       });
       if (r.status === 409 && Array.isArray(r.data.missing) && r.data.missing.length) {
         const first = Math.min(...r.data.missing); // rewind to the first missing part and resend from there
@@ -757,6 +824,13 @@
     finally { thumbBusy = false; }
   }
 
+  function recorderHealth() {
+    const cam = tracks.find(t => t.rec && t.rec.fileType === 'camera');
+    if (!cam) return null;
+    const s = cam.stats ? cam.stats() : null;
+    return s ? { mode: 'cfr', fps: s.fps, frames: s.frames, dups: s.dups, maxStallMs: s.maxStallMs, queueMax: s.queueMax } : { mode: 'vfr' };
+  }
+
   async function sendStatus() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const tot = await uploadTotals().catch(() => ({ recorded: 0, uploaded: 0, pending: 0, unfinished: 0 }));
@@ -773,6 +847,7 @@
       brightness: Math.round(brightness * 100) / 100,
       cameraOff: isCameraOff,
       storageFreeMB: free === null ? 0 : Math.round(free),
+      rec: recorderHealth(),
       lastError
     });
     if (isRecording || tot.unfinished || sessionStarted) {
@@ -782,7 +857,7 @@
 
   function handleServerMessage(msg) {
     switch (msg.type) {
-      case 'start-recording': startRecording(msg.quality, msg.take); break;
+      case 'start-recording': startRecording(msg.quality, msg.take, msg.fps); break;
       case 'stop-recording': stopRecording(true); break;
       case 'producer:request': enqueueRequest(msg); break;
       case 'producer:cancel-request': dismissCurrentToast(); break;
@@ -793,33 +868,52 @@
   // Recording
   // ========================================================
   let starting = false, currentQuality = 'standard';
-  async function startRecording(quality, take) {
+  let sessionFps = '29.97';
+  async function startRecording(quality, take, fps) {
     if (isRecording || starting) return;
     if (!videoMime) { setStatus('This browser cannot record video. Please use Chrome, Edge or Safari.', 'status-error'); return; }
     starting = true;
     try {
       if (!mediaStream || !mediaStream.active) { if (!(await reopenStream())) return; }
       if (quality && QUALITY[quality]) currentQuality = quality;
-      const q = QUALITY[currentQuality] || QUALITY.standard;
-      // Ask the camera for this tier's resolution; it delivers the closest it can.
+      let q = QUALITY[currentQuality] || QUALITY.standard;
+      // Tests can shrink the camera (?testres=640x360) so a software encoder keeps up.
+      const tr = /^(\d+)x(\d+)$/.exec(params.get('testres') || '');
+      if (tr) q = { ...q, w: +tr[1], h: +tr[2] };
+      if (fps === '29.97' || fps === '23.976') sessionFps = fps;
+      // Ask the camera for this tier's resolution and a locked frame rate (30, or 24 for a
+      // 23.976 session), so it doesn't slide down in dim light. Not every camera can lock.
+      const want = sessionFps === '23.976' ? 24 : 30;
       const vt = mediaStream.getVideoTracks()[0];
       if (vt && vt.applyConstraints) {
-        try { await vt.applyConstraints({ width: { ideal: q.w }, height: { ideal: q.h }, frameRate: { ideal: 30 } }); }
-        catch (e) { noteError(`Camera could not switch to ${q.label}: ${e.message}`); }
+        const size = { width: { ideal: q.w }, height: { ideal: q.h } };
+        try { await vt.applyConstraints({ ...size, frameRate: { ideal: want, min: want } }); }
+        catch {
+          try { await vt.applyConstraints({ ...size, frameRate: { ideal: want } }); }
+          catch (e) { noteError(`Camera could not switch to ${q.label}: ${e.message}`); }
+        }
       }
-      await startTakes(q, take);
+      // A camera that only does 24 records on the 23.976 grid rather than repeating every fourth frame.
+      const camFps = (vt && vt.getSettings().frameRate) || want;
+      const gridFps = sessionFps === '29.97' && camFps > 0 && camFps <= 25.5 ? '23.976' : sessionFps;
+      await startTakes(q, take, gridFps);
     } finally { starting = false; }
   }
 
-  async function startTakes(q, take) {
+  async function startTakes(q, take, gridFps = '29.97') {
     isRecording = true; sessionStarted = true;
     recordingStartTime = Date.now();
     // The server numbers takes per session so every guest's files share a take number.
     const idx = take > 0 ? take : recIndex;
     recIndex = idx + 1;
     try {
-      const cam = new TrackRecorder(mediaStream, { fileType: 'camera', mime: videoMime, videoBps: q.bps, audioBps: 192000, recIndex: idx });
-      tracks = [await cam.start()];
+      let cam = null;
+      if (CFR_ON) {
+        cam = await new CfrTrackRecorder(mediaStream, { fps: gridFps, videoBps: q.bps, audioBps: 192000, recIndex: idx }).start();
+        if (cam) cam.onFallback = failed => switchToStandardRecorder(failed, q, idx);
+      }
+      if (!cam) cam = await new TrackRecorder(mediaStream, { fileType: 'camera', mime: videoMime, videoBps: q.bps, audioBps: 192000, recIndex: idx }).start();
+      tracks = [cam];
       const at = mediaStream.getAudioTracks()[0];
       if (at && audioMime) {
         const aud = new TrackRecorder(new MediaStream([at]), { fileType: 'audio', mime: audioMime, audioBps: 192000, recIndex: idx });
@@ -841,6 +935,20 @@
     sizeBadge.title = q.label;
     sendWs({ type: 'recording-started', quality: currentQuality });
     sendStatus();
+  }
+
+  // If the constant-frame-rate encoder fails mid-take, keep what it wrote and carry on
+  // recording the rest of the take with MediaRecorder, as its own file.
+  async function switchToStandardRecorder(failed, q, idx) {
+    if (!isRecording || !tracks.includes(failed)) return;
+    try {
+      const mr = await new TrackRecorder(mediaStream, { fileType: 'camera', mime: videoMime, videoBps: q.bps, audioBps: 192000, recIndex: idx }).start();
+      lockedRecs.add(mr.rec.id);
+      tracks[tracks.indexOf(failed)] = mr;
+    } catch (e) { noteError(`Could not restart the recorder: ${e.message}`); }
+    await failed.stop().catch(() => {});
+    lockedRecs.delete(failed.rec.id);
+    kickUploader();
   }
 
   async function stopRecording(final) {

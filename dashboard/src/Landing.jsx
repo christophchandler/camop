@@ -25,6 +25,7 @@ export default function Landing({ onCreateSession }) {
   const [useExisting, setUseExisting] = useState(false);
   const [folder, setFolder] = useState('');
   const [brief, setBrief] = useState('');
+  const [fps, setFps] = useState('29.97');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,7 +37,7 @@ export default function Landing({ onCreateSession }) {
   const handleCreate = async () => {
     if (!canCreate) return;
     setCreating(true); setError('');
-    const err = await onCreateSession({ client: client.trim(), project: project.trim(), folder: existing, brief: brief.trim() });
+    const err = await onCreateSession({ client: client.trim(), project: project.trim(), folder: existing, brief: brief.trim(), fps });
     if (err) setError(err);
     setCreating(false);
   };
@@ -91,6 +92,14 @@ export default function Landing({ onCreateSession }) {
             )}
             <textarea value={brief} onChange={e => setBrief(e.target.value)} rows={2} placeholder="Brief (optional): who, what it's for, the questions"
               aria-label="Brief" className={`${field} resize-none`} />
+            <label className="flex items-center justify-between gap-2 text-xs text-gray-400">
+              <span>Frame rate</span>
+              <select value={fps} onChange={e => setFps(e.target.value)} aria-label="Frame rate"
+                className="bg-white/[0.04] border border-white/[0.08] rounded-lg px-2 py-1.5 text-white text-xs outline-none">
+                <option value="29.97">29.97 (recommended)</option>
+                <option value="23.976">23.976 (to cut with cinema footage)</option>
+              </select>
+            </label>
             <div className="text-[11px] text-gray-500 font-mono break-all min-h-[1rem]">
               {target ? <>Saves to Projects/<span className="text-gray-300">{target}</span>/2_FOOTAGE/1_VIDEO/CAMOP</> : 'Enter a client to see where the files go'}
             </div>

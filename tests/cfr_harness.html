@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>CFR harness</title></head>
+<body>
+<script src="/guest/vendor/mp4-muxer-5.2.2.js"></script>
+<script src="/guest/cfr.js"></script>
+<script>
+// Test source with ground-truth sync: every second the audio clock schedules a 100 ms beep,
+// and the picture flashes white for exactly those 100 ms, judged by the same audio clock.
+// stallAt/stallFor freeze the picture (no new frames) to imitate a camera hiccup.
+async function syncSource({ width = 1280, height = 720, fps = 30, stallAt = -1, stallFor = 0, alternate = null }) {
+  const ac = new AudioContext({ sampleRate: 48000 });
+  await ac.resume();
+  const dest = ac.createMediaStreamDestination();
+  const osc = ac.createOscillator(); osc.frequency.value = 1000;
+  const gain = ac.createGain(); gain.gain.value = 0;
+  osc.connect(gain).connect(dest); osc.start();
+  const t0 = ac.currentTime + 0.5;
+  for (let k = 0; k < 4000; k++) { gain.gain.setValueAtTime(0.8, t0 + k); gain.gain.setValueAtTime(0, t0 + k + 0.1); }
+  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const track = canvas.captureStream(0).getVideoTracks()[0];
+  let i = 0;
+  const draw = () => {
+    const t = ac.currentTime - t0;
+    const stalled = stallAt >= 0 && t >= stallAt && t < stallAt + stallFor;
+    if (!stalled) {
+      const flash = t >= 0 && (t % 1) < 0.1;
+      ctx.fillStyle = flash ? '#fff' : '#202020'; ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = flash ? '#000' : '#0f0'; ctx.font = '48px monospace'; ctx.fillText(String(i), 40, 80);
+      track.requestFrame();
+    }
+    i++;
+    const step = alternate ? alternate[i % alternate.length] : 1000 / fps;
+    setTimeout(draw, step);
+  };
+  draw();
+  return { stream: new MediaStream([track, dest.stream.getAudioTracks()[0]]), t0, ac };
+}
+
+window.recordTest = async ({ seconds = 10, fps = '29.97', kind = 'vp9', audioKind = 'opus', source = 'sync', srcOpts = {}, videoBps = 4e6 }) => {
+  let stream;
+  if (source === 'sync') stream = (await syncSource(srcOpts)).stream;
+  else stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: true });
+  const parts = []; let errors = [];
+  const rec = new CamOpCFR.CfrRecorder(stream, { fps, videoBps, audioBps: 128000, kind, audioKind, benchmark: false, onData: d => parts.push(d.slice()), onError: e => errors.push(String(e && e.message || e)) });
+  const ok = await rec.prepare();
+  if (!ok) return { ok: false, reason: 'unsupported' };
+  rec.start();
+  await new Promise(r => setTimeout(r, seconds * 1000));
+  const stats = await rec.stop();
+  const trackState = stream.getVideoTracks()[0].readyState;
+  const blob = new Blob(parts, { type: 'video/mp4' });
+  await fetch('/save', { method: 'POST', body: blob });
+  stream.getTracks().forEach(t => t.stop());
+  return { ok: true, bytes: blob.size, pieces: parts.length, stats, errors, trackState };
+};
+</script>
+</body></html>

@@ -133,7 +133,8 @@ app.post('/api/sessions', requireProducer, (req, res) => {
   if (S.sessionCount() >= MAX_SESSIONS) return res.status(429).json({ error: 'Maximum session limit reached' });
   const session = S.createSession({
     name, client: client || (!folder ? name : ''), project, folder,
-    brief: sanitizeString(b.brief, 2000)
+    brief: sanitizeString(b.brief, 2000),
+    fps: b.fps === '23.976' ? '23.976' : '29.97'
   });
   res.json({ ...S.serializeSession(session), magicLink: magicLinkFor(req, session.id) });
 });
@@ -278,7 +279,9 @@ app.post('/api/uploads/complete', async (req, res) => {
     fileType: ['camera', 'screen', 'audio'].includes(b.fileType) ? b.fileType : 'camera',
     startTs: Number(b.startTs) || null,
     durationMs: Number(b.durationMs) || null,
-    recIndex: Number(b.recIndex) || 1
+    recIndex: Number(b.recIndex) || 1,
+    fps: ['29.97', '23.976'].includes(b.fps) ? b.fps : null,
+    cfr: b.cfr === true
   };
   try {
     let parts;
@@ -503,6 +506,11 @@ function handleMessage(ws, info, msg) {
         cameraOff: Boolean(msg.cameraOff),
         lastError: sanitizeString(msg.lastError || '', 200),
         storageFreeMB: num(msg.storageFreeMB),
+        rec: msg.rec && typeof msg.rec === 'object' ? {
+          mode: msg.rec.mode === 'cfr' ? 'cfr' : 'vfr',
+          fps: ['29.97', '23.976'].includes(msg.rec.fps) ? msg.rec.fps : null,
+          frames: num(msg.rec.frames), dups: num(msg.rec.dups), maxStallMs: num(msg.rec.maxStallMs), queueMax: num(msg.rec.queueMax)
+        } : null,
         at: Date.now()
       };
       S.updateGuestStats(sessionId, guestId, stats);
@@ -577,7 +585,7 @@ function handleMessage(ws, info, msg) {
         if (msg.type === 'start-recording' && msg.guestId !== 'all' && QUALITIES.has(msg.quality)) guest.quality = msg.quality;
         // One take number per Start press, shared by every guest it starts, so files line up.
         if (msg.type === 'start-recording' && take === null) take = S.nextTake(session);
-        sendToGuest(session, gId, msg.type === 'start-recording' ? { type: msg.type, quality, take } : { type: msg.type });
+        sendToGuest(session, gId, msg.type === 'start-recording' ? { type: msg.type, quality, take, fps: session.fps || '29.97' } : { type: msg.type });
       }
       break;
     }

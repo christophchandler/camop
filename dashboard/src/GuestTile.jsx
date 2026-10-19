@@ -80,6 +80,10 @@ function Health({ guest }) {
   if (s.recording && !s.cameraOff && s.brightness >= 0 && s.brightness < 0.04) warnings.push('Camera image looks black. Another app may have taken the camera, or the lens is covered.');
   if (s.recording && s.width && s.width < 1280) warnings.push(`Camera is only ${s.width}x${s.height}`);
   if (s.storageFreeMB && s.storageFreeMB < 3000) warnings.push(`Low disk space: ${(s.storageFreeMB / 1024).toFixed(1)} GB free`);
+  const r = s.rec;
+  if (s.recording && r && r.mode === 'vfr') warnings.push('Recording at a variable frame rate (this browser can\'t do constant). The file will need a conform before editing.');
+  if (s.recording && r && r.mode === 'cfr' && r.maxStallMs >= 700) warnings.push(`Camera froze for ${(r.maxStallMs / 1000).toFixed(1)}s during this take; the file holds the last picture for that moment.`);
+  if (s.recording && r && r.mode === 'cfr' && r.queueMax > 45) warnings.push('Their computer is struggling to keep up with the encode; picture may stutter. Try a lower quality.');
   if (s.lastError) warnings.push(s.lastError);
   return (
     <div className="mt-3 space-y-1.5">
@@ -88,6 +92,8 @@ function Health({ guest }) {
         <span>{mb(s.uploadedBytes)} MB uploaded ({pct}%)</span>
         {s.pendingBytes > 0 && <span>{mb(s.pendingBytes)} MB to go</span>}
         {s.width > 0 && <span>{s.width}x{s.height} @ {Math.round(s.fps)} fps</span>}
+        {r && r.mode === 'cfr' && <span className="text-emerald-400">{r.fps} constant</span>}
+        {r && r.mode === 'vfr' && <span className="text-amber-400">variable fps</span>}
         <span className="flex items-center gap-1.5">mic
           <span className="inline-block w-16 h-1.5 bg-white/[0.06] rounded-full overflow-hidden align-middle">
             <span className="block h-full bg-emerald-400" style={{ width: `${Math.round(Math.min(1, s.micLevel * 2) * 100)}%` }} />
@@ -283,6 +289,9 @@ export default function GuestTile({ guest, sessionId, sendCommand }) {
                 {file.durationMs && (
                   <span className="text-gray-600 text-[11px]">{Math.round(file.durationMs / 1000)}s</span>
                 )}
+                {file.fileType === 'camera' && (file.cfr
+                  ? <span className="text-emerald-400 text-[10px]">{file.fps}</span>
+                  : <span className="text-amber-400 text-[10px]" title="Variable frame rate: conform before editing">VFR</span>)}
                 {file.status !== 'needs-conversion' && file.key && (
                   <a href={`/api/sessions/${sessionId}/download?key=${encodeURIComponent(file.key)}`}
                     className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/[0.06] text-gray-300 border border-white/[0.1] hover:bg-white/[0.12] transition-colors">

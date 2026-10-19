@@ -31,7 +31,7 @@ export default function Session({ session, sendCommand }) {
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-xl font-bold text-white mb-1">{session.name}</h2>
-            {session.path && <p className="text-xs text-gray-400 font-mono break-all">Saving to {session.path}</p>}
+            {session.path && <p className="text-xs text-gray-400 font-mono break-all">Saving to {session.path}{session.fps ? ` · ${session.fps} fps constant` : ''}</p>}
             {session.brief && <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{session.brief}</p>}
           </div>
           <div className="flex gap-2">
