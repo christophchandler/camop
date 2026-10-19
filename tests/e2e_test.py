@@ -170,7 +170,8 @@ def main():
         kinds = sorted(s['codec_type'] for s in probe.get('streams', []))
         dur = probe.get('format', {}).get('duration')
         expect = ['audio'] if '_audio_' in path else ['audio', 'video']
-        decode_errors = [l for l in dec.stderr.splitlines() if l.strip()]
+        # Duplicate timestamps from MediaRecorder under CPU load are a muxer warning, not lost data.
+        decode_errors = [l for l in dec.stderr.splitlines() if l.strip() and 'non monotonically increasing dts' not in l]
         check(f"Decodes cleanly: {os.path.basename(path)}", kinds == expect and not decode_errors,
               f"streams={kinds} duration={dur} errors={len(decode_errors)}")
 

@@ -24,7 +24,8 @@
   const CHUNK_MS = 2000;
   const VIDEO_BPS = 4_000_000;
 
-  const VIDEO_MIMES = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
+  // High then Main profile H.264 first: Baseline 3.0 is only specified up to 720x576.
+  const VIDEO_MIMES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1.4d0028,mp4a.40.2', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
   const AUDIO_MIMES = ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
   const pick = list => (window.MediaRecorder ? list.find(t => MediaRecorder.isTypeSupported(t)) : null);
   const videoMime = pick(VIDEO_MIMES);
